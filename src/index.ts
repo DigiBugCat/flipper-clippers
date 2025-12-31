@@ -7,6 +7,7 @@ import clips from './handlers/clips';
 import compare from './handlers/compare';
 import leaderboard from './handlers/leaderboard';
 import saved from './handlers/saved';
+import { aggregateGlobalRankings } from './services/aggregation';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -25,6 +26,12 @@ app.route('/api/saved', saved);
 
 // Health check
 app.get('/api/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+// Manual aggregation trigger
+app.post('/api/aggregate', async (c) => {
+  await aggregateGlobalRankings(c.env.DB);
+  return c.json({ success: true, message: 'Global rankings aggregated' });
+});
 
 // Static files are handled by Wrangler's [assets] configuration
 // See wrangler.toml: [assets] directory = "public"

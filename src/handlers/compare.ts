@@ -69,6 +69,7 @@ compare.get('/next', requireAuth, async (c) => {
       title: pair.clipA.title,
       twitchUrl: pair.clipA.twitch_url,
       clippedBy: pair.clipA.clipped_by,
+      clippedAt: pair.clipA.clipped_at,
     },
     clipB: {
       id: pair.clipB.id,
@@ -76,6 +77,7 @@ compare.get('/next', requireAuth, async (c) => {
       title: pair.clipB.title,
       twitchUrl: pair.clipB.twitch_url,
       clippedBy: pair.clipB.clipped_by,
+      clippedAt: pair.clipB.clipped_at,
     },
   });
 });
@@ -103,6 +105,7 @@ compare.get('/pair', requireAuth, async (c) => {
       title: clipA.title,
       twitchUrl: clipA.twitch_url,
       clippedBy: clipA.clipped_by,
+      clippedAt: clipA.clipped_at,
     },
     clipB: {
       id: clipB.id,
@@ -110,6 +113,7 @@ compare.get('/pair', requireAuth, async (c) => {
       title: clipB.title,
       twitchUrl: clipB.twitch_url,
       clippedBy: clipB.clipped_by,
+      clippedAt: clipB.clipped_at,
     },
   });
 });
@@ -225,9 +229,9 @@ compare.post('/vote', requireAuth, async (c) => {
   const isSuperLike = isSuperLikeResult(body.result);
   await incrementUserComparisons(c.env.DB, userId, isSuperLike);
 
-  // Periodically aggregate global rankings (every 10 comparisons)
+  // Periodically aggregate global rankings (every 3 comparisons)
   const user = c.get('user');
-  if ((user.total_comparisons + 1) % 10 === 0) {
+  if ((user.total_comparisons + 1) % 3 === 0) {
     // Run aggregation in background (don't await)
     c.executionCtx.waitUntil(aggregateGlobalRankings(c.env.DB));
   }

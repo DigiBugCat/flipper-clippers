@@ -103,11 +103,21 @@ function main() {
     }
     seen.add(parsed.slug);
 
+    // Parse date from YYYYMMDD format
+    let clippedAt = null;
+    if (date && date.length === 8) {
+      const year = date.substring(0, 4);
+      const month = date.substring(4, 6);
+      const day = date.substring(6, 8);
+      clippedAt = `${year}-${month}-${day}`;
+    }
+
     clips.push({
       slug: parsed.slug,
       title: title || parsed.slug,
       clippedBy: uploader || 'Unknown',
       url: parsed.fullUrl,
+      clippedAt,
     });
   }
 
@@ -129,8 +139,9 @@ function main() {
   output.push('-- Insert clips');
 
   for (const clip of clips) {
+    const clippedAtValue = clip.clippedAt ? `'${clip.clippedAt}'` : 'NULL';
     output.push(
-      `INSERT INTO clips (twitch_slug, title, clipped_by, twitch_url) VALUES ('${escapeSql(clip.slug)}', '${escapeSql(clip.title)}', '${escapeSql(clip.clippedBy)}', '${escapeSql(clip.url)}');`
+      `INSERT INTO clips (twitch_slug, title, clipped_by, twitch_url, clipped_at) VALUES ('${escapeSql(clip.slug)}', '${escapeSql(clip.title)}', '${escapeSql(clip.clippedBy)}', '${escapeSql(clip.url)}', ${clippedAtValue});`
     );
   }
 

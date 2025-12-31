@@ -574,8 +574,14 @@ a:hover {
 .clipped-by {
   font-size: 0.8rem;
   color: var(--text-secondary);
-  margin-bottom: var(--space-sm);
   font-style: italic;
+}
+
+.clipped-at {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-sm);
+  opacity: 0.8;
 }
 
 /* Video title row with save button */

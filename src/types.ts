@@ -25,6 +25,7 @@ export interface Clip {
   title: string | null;
   clipped_by: string | null;
   twitch_url: string;
+  clipped_at: string | null;
   created_at: string;
   is_active: number;
   global_elo: number;

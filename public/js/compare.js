@@ -44,6 +44,12 @@ function displayClips(a, b) {
   if (clippedByA) clippedByA.textContent = `Clipped by ${a.clippedBy || 'Unknown'}`;
   if (clippedByB) clippedByB.textContent = `Clipped by ${b.clippedBy || 'Unknown'}`;
 
+  // Update clipped at
+  const clippedAtA = document.getElementById('clipped-at-a');
+  const clippedAtB = document.getElementById('clipped-at-b');
+  if (clippedAtA) clippedAtA.textContent = a.clippedAt ? formatDate(a.clippedAt) : '';
+  if (clippedAtB) clippedAtB.textContent = b.clippedAt ? formatDate(b.clippedAt) : '';
+
   // Update links
   const linkA = document.getElementById('link-a');
   const linkB = document.getElementById('link-b');
@@ -232,6 +238,13 @@ async function loadNextPair() {
 
     if (clippedByA) clippedByA.textContent = `Clipped by ${clipA.clippedBy || 'Unknown'}`;
     if (clippedByB) clippedByB.textContent = `Clipped by ${clipB.clippedBy || 'Unknown'}`;
+
+    // Update clipped at
+    const clippedAtA = document.getElementById('clipped-at-a');
+    const clippedAtB = document.getElementById('clipped-at-b');
+
+    if (clippedAtA) clippedAtA.textContent = clipA.clippedAt ? formatDate(clipA.clippedAt) : '';
+    if (clippedAtB) clippedAtB.textContent = clipB.clippedAt ? formatDate(clipB.clippedAt) : '';
 
     // Update links
     const linkA = document.getElementById('link-a');

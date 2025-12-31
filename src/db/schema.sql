@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS clips (
     title TEXT,
     clipped_by TEXT,
     twitch_url TEXT NOT NULL,
+    clipped_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     is_active INTEGER DEFAULT 1,
     -- Global ELO rating (aggregated from all users)
