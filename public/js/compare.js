@@ -1,0 +1,400 @@
+/**
+ * Clip Ranker - Compare Page Logic
+ * =================================
+ */
+
+// Page state
+let clipA = null;
+let clipB = null;
+let startTime = null;
+let isLoading = false;
+let savedStates = { a: false, b: false };
+
+/**
+ * Update the browser URL with current clip IDs
+ */
+function updateUrl(a, b, replace = false) {
+  const url = `/compare?a=${a.id}&b=${b.id}`;
+  const state = { clipA: a, clipB: b };
+
+  if (replace) {
+    history.replaceState(state, '', url);
+  } else {
+    history.pushState(state, '', url);
+  }
+}
+
+/**
+ * Display clips from state (used for back/forward navigation)
+ */
+function displayClips(a, b) {
+  clipA = a;
+  clipB = b;
+  startTime = Date.now();
+
+  // Update titles
+  const titleA = document.getElementById('title-a');
+  const titleB = document.getElementById('title-b');
+  if (titleA) titleA.textContent = a.title || a.twitchSlug;
+  if (titleB) titleB.textContent = b.title || b.twitchSlug;
+
+  // Update clipped by
+  const clippedByA = document.getElementById('clipped-by-a');
+  const clippedByB = document.getElementById('clipped-by-b');
+  if (clippedByA) clippedByA.textContent = `Clipped by ${a.clippedBy || 'Unknown'}`;
+  if (clippedByB) clippedByB.textContent = `Clipped by ${b.clippedBy || 'Unknown'}`;
+
+  // Update links
+  const linkA = document.getElementById('link-a');
+  const linkB = document.getElementById('link-b');
+  if (linkA) linkA.href = a.twitchUrl || `https://clips.twitch.tv/${a.twitchSlug}`;
+  if (linkB) linkB.href = b.twitchUrl || `https://clips.twitch.tv/${b.twitchSlug}`;
+
+  // Create embeds
+  createTwitchEmbed(a.twitchSlug, 'video-wrapper-a');
+  createTwitchEmbed(b.twitchSlug, 'video-wrapper-b');
+
+  // Check saved states
+  checkSavedStates();
+}
+
+/**
+ * Load a specific pair by IDs
+ */
+async function loadSpecificPair(aId, bId) {
+  if (isLoading) return;
+
+  isLoading = true;
+  showLoading(true);
+
+  try {
+    const response = await fetch(`/api/compare/pair?a=${aId}&b=${bId}`);
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        window.location.href = '/api/auth/login';
+        return;
+      }
+      // If pair not found, load random pair instead
+      if (response.status === 404) {
+        await loadNextPair();
+        return;
+      }
+      throw new Error('Failed to load clips');
+    }
+
+    const data = await response.json();
+    displayClips(data.clipA, data.clipB);
+    // Replace URL state (don't add to history since we loaded from URL)
+    updateUrl(data.clipA, data.clipB, true);
+    // Check saved states
+    await checkSavedStates();
+    showLoading(false);
+  } catch (error) {
+    console.error('Failed to load specific pair:', error);
+    showToast('Failed to load clips', 'error');
+    showLoading(false);
+  } finally {
+    isLoading = false;
+  }
+}
+
+/**
+ * Update save button appearance
+ */
+function updateSaveButtons() {
+  const saveA = document.getElementById('save-a');
+  const saveB = document.getElementById('save-b');
+
+  if (saveA) {
+    saveA.textContent = savedStates.a ? '★' : '☆';
+    saveA.classList.toggle('saved', savedStates.a);
+    saveA.title = savedStates.a ? 'Unsave clip' : 'Save clip';
+  }
+  if (saveB) {
+    saveB.textContent = savedStates.b ? '★' : '☆';
+    saveB.classList.toggle('saved', savedStates.b);
+    saveB.title = savedStates.b ? 'Unsave clip' : 'Save clip';
+  }
+}
+
+/**
+ * Check saved state for current clips
+ */
+async function checkSavedStates() {
+  if (!clipA || !clipB) return;
+
+  try {
+    const response = await fetch('/api/saved/check-multiple', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clipIds: [clipA.id, clipB.id] }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      savedStates.a = data.saved[clipA.id] || false;
+      savedStates.b = data.saved[clipB.id] || false;
+      updateSaveButtons();
+    }
+  } catch (error) {
+    console.error('Failed to check saved states:', error);
+  }
+}
+
+/**
+ * Toggle save state for a clip
+ */
+async function toggleSave(side) {
+  const clip = side === 'a' ? clipA : clipB;
+  if (!clip) return;
+
+  const isSaved = savedStates[side];
+
+  try {
+    const response = await fetch(`/api/saved/${clip.id}`, {
+      method: isSaved ? 'DELETE' : 'POST',
+    });
+
+    if (response.ok) {
+      savedStates[side] = !isSaved;
+      updateSaveButtons();
+      showToast(savedStates[side] ? 'Clip saved!' : 'Clip unsaved', 'success');
+    } else {
+      throw new Error('Failed to update save state');
+    }
+  } catch (error) {
+    console.error('Failed to toggle save:', error);
+    showToast('Failed to save clip', 'error');
+  }
+}
+
+/**
+ * Load user stats
+ */
+async function loadStats() {
+  try {
+    const response = await fetch('/api/compare/stats');
+    if (!response.ok) return;
+
+    const data = await response.json();
+
+    const comparisonsEl = document.getElementById('user-comparisons');
+    const superLikesEl = document.getElementById('user-super-likes');
+
+    if (comparisonsEl) {
+      comparisonsEl.textContent = formatNumber(data.totalComparisons || 0);
+    }
+    if (superLikesEl) {
+      superLikesEl.textContent = formatNumber(data.totalSuperLikes || 0);
+    }
+  } catch (error) {
+    console.error('Failed to load stats:', error);
+  }
+}
+
+/**
+ * Load the next pair of clips to compare
+ */
+async function loadNextPair() {
+  if (isLoading) return;
+
+  isLoading = true;
+  showLoading(true);
+
+  try {
+    const response = await fetch('/api/compare/next');
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        window.location.href = '/api/auth/login';
+        return;
+      }
+      throw new Error('Failed to load clips');
+    }
+
+    const data = await response.json();
+
+    clipA = data.clipA;
+    clipB = data.clipB;
+    startTime = Date.now();
+
+    // Update titles
+    const titleA = document.getElementById('title-a');
+    const titleB = document.getElementById('title-b');
+
+    if (titleA) titleA.textContent = clipA.title || clipA.twitchSlug;
+    if (titleB) titleB.textContent = clipB.title || clipB.twitchSlug;
+
+    // Update clipped by
+    const clippedByA = document.getElementById('clipped-by-a');
+    const clippedByB = document.getElementById('clipped-by-b');
+
+    if (clippedByA) clippedByA.textContent = `Clipped by ${clipA.clippedBy || 'Unknown'}`;
+    if (clippedByB) clippedByB.textContent = `Clipped by ${clipB.clippedBy || 'Unknown'}`;
+
+    // Update links
+    const linkA = document.getElementById('link-a');
+    const linkB = document.getElementById('link-b');
+
+    if (linkA) {
+      linkA.href = clipA.twitchUrl || `https://clips.twitch.tv/${clipA.twitchSlug}`;
+    }
+    if (linkB) {
+      linkB.href = clipB.twitchUrl || `https://clips.twitch.tv/${clipB.twitchSlug}`;
+    }
+
+    // Create embeds
+    createTwitchEmbed(clipA.twitchSlug, 'video-wrapper-a');
+    createTwitchEmbed(clipB.twitchSlug, 'video-wrapper-b');
+
+    // Update URL for browser history
+    updateUrl(clipA, clipB);
+
+    // Check saved states for the new clips
+    await checkSavedStates();
+
+    showLoading(false);
+  } catch (error) {
+    console.error('Failed to load clips:', error);
+    showToast('Failed to load clips', 'error');
+    showLoading(false);
+  } finally {
+    isLoading = false;
+  }
+}
+
+/**
+ * Submit a vote
+ */
+async function vote(result) {
+  if (isLoading || !clipA || !clipB) return;
+
+  isLoading = true;
+
+  try {
+    const response = await fetch('/api/compare/vote', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        clip_a_id: clipA.id,
+        clip_b_id: clipB.id,
+        result: result,
+        time_spent_ms: Date.now() - startTime,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Vote failed');
+    }
+
+    // Show feedback for super likes
+    if (result.startsWith('super')) {
+      showToast('Super Like!', 'success');
+    }
+
+    // Reset loading state before loading next pair
+    isLoading = false;
+
+    // Reload stats and next pair
+    await loadStats();
+    await loadNextPair();
+  } catch (error) {
+    console.error('Vote failed:', error);
+    showToast('Failed to submit vote', 'error');
+    isLoading = false;
+  }
+}
+
+/**
+ * Toggle loading state
+ */
+function showLoading(show) {
+  const loadingState = document.getElementById('loading-state');
+  const comparisonContainer = document.getElementById('comparison-container');
+  const actionButtons = document.querySelectorAll('.action-buttons');
+
+  if (show) {
+    if (loadingState) loadingState.classList.remove('hidden');
+    if (comparisonContainer) comparisonContainer.style.opacity = '0.5';
+    actionButtons.forEach(btn => btn.style.pointerEvents = 'none');
+  } else {
+    if (loadingState) loadingState.classList.add('hidden');
+    if (comparisonContainer) comparisonContainer.style.opacity = '1';
+    actionButtons.forEach(btn => btn.style.pointerEvents = 'auto');
+  }
+}
+
+/**
+ * Initialize the compare page
+ */
+async function initComparePage() {
+  const user = await checkAuth();
+
+  const authRequired = document.getElementById('auth-required');
+  const compareUi = document.getElementById('compare-ui');
+
+  if (!user) {
+    if (authRequired) authRequired.classList.remove('hidden');
+    if (compareUi) compareUi.classList.add('hidden');
+    return;
+  }
+
+  if (authRequired) authRequired.classList.add('hidden');
+  if (compareUi) compareUi.classList.remove('hidden');
+
+  await loadStats();
+
+  // Check URL params for specific pair
+  const params = new URLSearchParams(window.location.search);
+  const clipAId = params.get('a');
+  const clipBId = params.get('b');
+
+  if (clipAId && clipBId) {
+    await loadSpecificPair(clipAId, clipBId);
+  } else {
+    await loadNextPair();
+  }
+
+  // Set up keyboard shortcuts
+  document.addEventListener('keydown', handleKeyboard);
+
+  // Handle browser back/forward buttons
+  window.addEventListener('popstate', (event) => {
+    if (event.state?.clipA && event.state?.clipB) {
+      displayClips(event.state.clipA, event.state.clipB);
+    }
+  });
+}
+
+/**
+ * Handle keyboard shortcuts
+ */
+function handleKeyboard(event) {
+  // Ignore if typing in an input
+  if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') {
+    return;
+  }
+
+  switch (event.key) {
+    case '1':
+      vote(event.shiftKey ? 'super_a' : 'clip_a');
+      break;
+    case '2':
+      vote(event.shiftKey ? 'super_b' : 'clip_b');
+      break;
+    case 't':
+    case 'T':
+      vote('tie');
+      break;
+    case 's':
+    case 'S':
+      vote('skip');
+      break;
+  }
+}
+
+// Initialize on DOM ready
+document.addEventListener('DOMContentLoaded', initComparePage);

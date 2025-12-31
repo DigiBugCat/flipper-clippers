@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clip Ranker - Rate Twitch Clips</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="nav-brand">Clip Ranker</a>
+    <div class="nav-links">
+      <a href="/compare" class="nav-link">Compare</a>
+      <a href="/leaderboard" class="nav-link">Leaderboard</a>
+    </div>
+    <div class="nav-user" id="nav-user">
+      <!-- Populated by JS -->
+    </div>
+  </nav>
+
+  <div class="container">
+    <section class="hero">
+      <h1>Rank Your Favorite Clips</h1>
+      <p>
+        Compare Twitch clips head-to-head and help determine the best moments.
+        Sign in with Twitch to start ranking!
+      </p>
+      <div id="auth-section">
+        <a href="/api/auth/login" class="btn btn-twitch">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
+          </svg>
+          Sign in with Twitch
+        </a>
+        <a href="/api/auth/dev-login" class="btn btn-secondary" style="margin-left: 1rem;">
+          Dev Login (Skip OAuth)
+        </a>
+      </div>
+    </section>
+
+    <section class="stats-grid" id="stats-section">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-clips">--</div>
+        <div class="stat-label">Total Clips</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-users">--</div>
+        <div class="stat-label">Active Rankers</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-comparisons">--</div>
+        <div class="stat-label">Comparisons Made</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-rated">--</div>
+        <div class="stat-label">Clips Rated</div>
+      </div>
+    </section>
+
+    <section class="top-clips-section" id="top-clips-section" style="display: none;">
+      <h2 style="margin-bottom: 1rem;">Top Ranked Clips</h2>
+      <table class="leaderboard-table">
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Clip</th>
+            <th>ELO</th>
+            <th>Super Likes</th>
+          </tr>
+        </thead>
+        <tbody id="top-clips-body">
+        </tbody>
+      </table>
+    </section>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    // Check auth and load stats on page load
+    document.addEventListener('DOMContentLoaded', async () => {
+      await checkAuth();
+      await loadHomeStats();
+      await loadTopClips();
+    });
+
+    async function loadHomeStats() {
+      try {
+        const response = await fetch('/api/leaderboard/stats');
+        const data = await response.json();
+
+        document.getElementById('stat-clips').textContent = data.totalClips || 0;
+        document.getElementById('stat-users').textContent = data.totalUsers || 0;
+        document.getElementById('stat-comparisons').textContent = data.totalComparisons || 0;
+        document.getElementById('stat-rated').textContent = data.totalClipsRated || 0;
+      } catch (error) {
+        console.error('Failed to load stats:', error);
+      }
+    }
+
+    async function loadTopClips() {
+      try {
+        const response = await fetch('/api/leaderboard/top?limit=5');
+        const data = await response.json();
+
+        if (data.topClips && data.topClips.length > 0) {
+          const tbody = document.getElementById('top-clips-body');
+          tbody.innerHTML = data.topClips.map(clip => `
+            <tr>
+              <td class="rank-cell rank-${clip.rank}">#${clip.rank}</td>
+              <td class="clip-title-cell">${clip.title || clip.twitchSlug}</td>
+              <td class="elo-cell">${clip.elo}</td>
+              <td>${clip.superLikes || 0} ⭐</td>
+            </tr>
+          `).join('');
+
+          document.getElementById('top-clips-section').style.display = 'block';
+        }
+      } catch (error) {
+        console.error('Failed to load top clips:', error);
+      }
+    }
+  </script>
+</body>
+</html>

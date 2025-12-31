@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flipper Clippers - Arross Clip Rankings</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="navbar-inner">
+      <a href="/" class="nav-brand">Flipper Clippers</a>
+      <div class="nav-links">
+        <a href="/compare" class="nav-link">Compare</a>
+        <a href="/leaderboard" class="nav-link">Leaderboard</a>
+        <a href="/saved" class="nav-link">Saved</a>
+      </div>
+      <div class="nav-user" id="nav-user">
+        <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="container">
+    <!-- Hero Section -->
+    <section class="hero">
+      <h1 class="hero-title">Rank Arross's Best Clips</h1>
+      <p class="hero-subtitle">
+        Compare clips head-to-head and help the community decide which Arross moments are the greatest of all time.
+      </p>
+      <div id="auth-section">
+        <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+      </div>
+    </section>
+
+    <!-- Clip Submission Section (shown when logged in) -->
+    <section class="submit-section hidden" id="submit-section">
+      <h2>Submit a Clip</h2>
+      <p class="submit-subtitle">Add a new Arross clip to rank against your favorites</p>
+      <form id="submit-form" class="submit-form">
+        <input
+          type="url"
+          id="clip-url"
+          placeholder="Paste Twitch clip URL (e.g., clips.twitch.tv/...)"
+          required
+        />
+        <button type="submit" class="btn btn-primary" id="submit-btn">Submit Clip</button>
+      </form>
+      <div class="submit-error hidden" id="submit-error"></div>
+    </section>
+
+    <!-- Binary Search Ranking Section (shown during ranking) -->
+    <section class="ranking-section hidden" id="ranking-section">
+      <div class="ranking-header">
+        <h2>Rank Your Clip</h2>
+        <p class="ranking-progress">Comparison <span id="ranking-step">1</span> of ~<span id="ranking-total">7</span></p>
+      </div>
+      <p class="ranking-instruction">Which clip is better?</p>
+
+      <div class="ranking-comparison">
+        <div class="ranking-clip">
+          <div class="ranking-label">Your Submitted Clip</div>
+          <div class="video-wrapper" id="ranking-submitted-video"></div>
+          <div class="ranking-title" id="ranking-submitted-title">Loading...</div>
+          <button class="btn btn-primary btn-vote" id="vote-submitted">This One</button>
+        </div>
+
+        <div class="ranking-vs">VS</div>
+
+        <div class="ranking-clip">
+          <div class="ranking-label">Existing Clip</div>
+          <div class="video-wrapper" id="ranking-existing-video"></div>
+          <div class="ranking-title" id="ranking-existing-title">Loading...</div>
+          <button class="btn btn-secondary btn-vote" id="vote-existing">This One</button>
+        </div>
+      </div>
+
+      <div class="ranking-actions">
+        <button class="btn btn-ghost" id="vote-tie">They're Equal</button>
+        <button class="btn btn-ghost" id="cancel-ranking">Cancel</button>
+      </div>
+    </section>
+
+    <!-- Ranking Complete Section -->
+    <section class="ranking-complete hidden" id="ranking-complete">
+      <h2>Clip Ranked!</h2>
+      <p id="ranking-result-message">Your clip has been placed at position #1</p>
+      <div class="ranking-complete-actions">
+        <button class="btn btn-primary" id="submit-another">Submit Another Clip</button>
+        <a href="/compare" class="btn btn-secondary">Continue Comparing</a>
+      </div>
+    </section>
+
+    <!-- Stats Grid -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-clips">--</div>
+        <div class="stat-label">Total Clips</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-users">--</div>
+        <div class="stat-label">Active Rankers</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-comparisons">--</div>
+        <div class="stat-label">Comparisons</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Floating Characters -->
+  <div class="floating-character float-1">
+    <img src="/images/goose-honk.png" alt="Honking Goose">
+  </div>
+  <div class="floating-character float-2">
+    <img src="/images/nugget-penguin.png" alt="Nugget Penguin">
+  </div>
+  <div class="floating-character float-3">
+    <img src="/images/banana-penguin.png" alt="Banana Penguin">
+  </div>
+  <div class="floating-character float-4">
+    <img src="/images/coffee-penguin.png" alt="Coffee Penguin">
+  </div>
+  <div class="floating-character float-5">
+    <img src="/images/goose-sit.png" alt="Sitting Goose">
+  </div>
+
+  <!-- Scripts -->
+  <script src="/js/app.js"></script>
+  <script>
+    // State for ranking session
+    let rankingClipId = null;
+    let submittedClip = null;
+
+    // Initialize home page
+    document.addEventListener('DOMContentLoaded', async () => {
+      // Check auth and update nav
+      const user = await checkAuth();
+
+      // Update auth section and show submit form if logged in
+      const authSection = document.getElementById('auth-section');
+      const submitSection = document.getElementById('submit-section');
+
+      if (user) {
+        if (authSection) {
+          authSection.innerHTML = '<a href="/compare" class="btn btn-primary">Start Ranking</a>';
+        }
+        if (submitSection) {
+          submitSection.classList.remove('hidden');
+        }
+      }
+
+      // Load stats
+      try {
+        const response = await fetch('/api/leaderboard/stats');
+        const data = await response.json();
+
+        document.getElementById('stat-clips').textContent = formatNumber(data.totalClips || 0);
+        document.getElementById('stat-users').textContent = formatNumber(data.totalUsers || 0);
+        document.getElementById('stat-comparisons').textContent = formatNumber(data.totalComparisons || 0);
+      } catch (error) {
+        console.error('Failed to load stats:', error);
+      }
+
+      // Setup event listeners
+      setupSubmitForm();
+      setupRankingButtons();
+    });
+
+    function setupSubmitForm() {
+      const form = document.getElementById('submit-form');
+      const errorEl = document.getElementById('submit-error');
+
+      form?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const urlInput = document.getElementById('clip-url');
+        const submitBtn = document.getElementById('submit-btn');
+        const url = urlInput.value.trim();
+
+        if (!url) return;
+
+        // Disable form while submitting
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Submitting...';
+        errorEl.classList.add('hidden');
+
+        try {
+          const response = await fetch('/api/clips/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || 'Failed to submit clip');
+          }
+
+          // Check if already ranked
+          if (data.alreadyRanked) {
+            showToast(`You've already ranked this clip! (ELO: ${data.currentElo})`, 'info');
+            urlInput.value = '';
+            return;
+          }
+
+          // Check if needs ranking (binary search)
+          if (data.needsRanking && data.rankingSession) {
+            submittedClip = data.clip;
+            rankingClipId = data.clip.id;
+            startRankingSession(data.rankingSession);
+          } else {
+            // No ranking needed (user has <3 clips)
+            showToast(data.message || 'Clip added!', 'success');
+            urlInput.value = '';
+          }
+
+        } catch (error) {
+          errorEl.textContent = error.message;
+          errorEl.classList.remove('hidden');
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Submit Clip';
+        }
+      });
+    }
+
+    function startRankingSession(session) {
+      // Hide submit section, show ranking section
+      document.getElementById('submit-section').classList.add('hidden');
+      document.getElementById('ranking-section').classList.remove('hidden');
+      document.getElementById('ranking-complete').classList.add('hidden');
+
+      // Update progress
+      document.getElementById('ranking-step').textContent = session.progress.step;
+      document.getElementById('ranking-total').textContent = session.progress.totalSteps;
+
+      // Load clips into video players
+      const submittedClip = session.clipToRank;
+      const existingClip = session.compareWith;
+
+      document.getElementById('ranking-submitted-title').textContent = submittedClip.title || submittedClip.twitchSlug;
+      document.getElementById('ranking-existing-title').textContent = existingClip.title || existingClip.twitchSlug;
+
+      createTwitchEmbed(submittedClip.twitchSlug, 'ranking-submitted-video');
+      createTwitchEmbed(existingClip.twitchSlug, 'ranking-existing-video');
+    }
+
+    function setupRankingButtons() {
+      document.getElementById('vote-submitted')?.addEventListener('click', () => submitRankingVote('submitted'));
+      document.getElementById('vote-existing')?.addEventListener('click', () => submitRankingVote('existing'));
+      document.getElementById('vote-tie')?.addEventListener('click', () => submitRankingVote('tie'));
+      document.getElementById('cancel-ranking')?.addEventListener('click', cancelRanking);
+      document.getElementById('submit-another')?.addEventListener('click', resetToSubmitForm);
+    }
+
+    async function submitRankingVote(result) {
+      if (!rankingClipId) return;
+
+      // Disable buttons
+      const buttons = document.querySelectorAll('.btn-vote, #vote-tie');
+      buttons.forEach(btn => btn.disabled = true);
+
+      try {
+        const response = await fetch(`/api/clips/rank-session/${rankingClipId}/vote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ result }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to submit vote');
+        }
+
+        if (data.done) {
+          // Ranking complete!
+          showRankingComplete(data);
+        } else {
+          // Continue with next comparison
+          document.getElementById('ranking-step').textContent = data.progress.step;
+
+          const existingClip = data.compareWith;
+          document.getElementById('ranking-existing-title').textContent = existingClip.title || existingClip.twitchSlug;
+          createTwitchEmbed(existingClip.twitchSlug, 'ranking-existing-video');
+        }
+
+      } catch (error) {
+        showToast(error.message, 'error');
+      } finally {
+        buttons.forEach(btn => btn.disabled = false);
+      }
+    }
+
+    async function cancelRanking() {
+      if (rankingClipId) {
+        await fetch(`/api/clips/rank-session/${rankingClipId}`, { method: 'DELETE' });
+      }
+      resetToSubmitForm();
+    }
+
+    function showRankingComplete(data) {
+      document.getElementById('ranking-section').classList.add('hidden');
+      document.getElementById('ranking-complete').classList.remove('hidden');
+      document.getElementById('ranking-result-message').textContent =
+        data.message || `Your clip has been ranked at position #${data.finalPosition}!`;
+    }
+
+    function resetToSubmitForm() {
+      rankingClipId = null;
+      submittedClip = null;
+      document.getElementById('clip-url').value = '';
+      document.getElementById('submit-section').classList.remove('hidden');
+      document.getElementById('ranking-section').classList.add('hidden');
+      document.getElementById('ranking-complete').classList.add('hidden');
+
+      // Clear video embeds
+      document.getElementById('ranking-submitted-video').innerHTML = '';
+      document.getElementById('ranking-existing-video').innerHTML = '';
+    }
+  </script>
+</body>
+</html>

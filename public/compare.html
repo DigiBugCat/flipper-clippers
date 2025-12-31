@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Compare - Flipper Clippers</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="navbar-inner">
+      <a href="/" class="nav-brand">Flipper Clippers</a>
+      <div class="nav-links">
+        <a href="/compare" class="nav-link active">Compare</a>
+        <a href="/leaderboard" class="nav-link">Leaderboard</a>
+        <a href="/saved" class="nav-link">Saved</a>
+      </div>
+      <div class="nav-user" id="nav-user">
+        <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="container">
+    <!-- Auth Required State -->
+    <div id="auth-required" class="auth-required hidden">
+      <h2>Sign In to Start Ranking</h2>
+      <p>Sign in with Twitch to compare and rank Arross's best clips.</p>
+      <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+    </div>
+
+    <!-- Compare UI -->
+    <div id="compare-ui" class="hidden">
+      <!-- Progress Stats -->
+      <div class="progress-bar">
+        <div class="progress-stats">
+          <div class="progress-stat">
+            <div class="progress-stat-value" id="user-comparisons">0</div>
+            <div class="progress-stat-label">Comparisons</div>
+          </div>
+          <div class="progress-stat">
+            <div class="progress-stat-value" id="user-super-likes">0</div>
+            <div class="progress-stat-label">Super Likes</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Comparison Container -->
+      <div class="comparison-container" id="comparison-container">
+        <!-- Left Video Panel -->
+        <div class="video-panel video-panel--left">
+          <div class="video-wrapper" id="video-wrapper-a"></div>
+          <div class="video-info">
+            <div class="video-title-row">
+              <div class="video-title" id="title-a">Loading...</div>
+              <button class="btn-save" id="save-a" onclick="toggleSave('a')" title="Save clip">☆</button>
+            </div>
+            <div class="clipped-by" id="clipped-by-a">Clipped by ...</div>
+            <a href="#" id="link-a" class="clip-link" target="_blank" rel="noopener">
+              Open on Twitch
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd" />
+                <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd" />
+              </svg>
+            </a>
+          </div>
+        </div>
+
+        <!-- VS Divider -->
+        <div class="vs-divider">
+          <div class="vs-line"></div>
+          <div class="vs-text">VS</div>
+          <div class="vs-line"></div>
+        </div>
+
+        <!-- Right Video Panel -->
+        <div class="video-panel video-panel--right">
+          <div class="video-wrapper" id="video-wrapper-b"></div>
+          <div class="video-info">
+            <div class="video-title-row">
+              <div class="video-title" id="title-b">Loading...</div>
+              <button class="btn-save" id="save-b" onclick="toggleSave('b')" title="Save clip">☆</button>
+            </div>
+            <div class="clipped-by" id="clipped-by-b">Clipped by ...</div>
+            <a href="#" id="link-b" class="clip-link" target="_blank" rel="noopener">
+              Open on Twitch
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd" />
+                <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd" />
+              </svg>
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Loading State -->
+      <div class="loading hidden" id="loading-state">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading clips...</div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="action-buttons">
+        <button class="btn-vote btn-vote--super" onclick="vote('super_a')">
+          ⭐ Super Left
+        </button>
+        <button class="btn-vote btn-vote--left" onclick="vote('clip_a')">
+          👈 Left
+        </button>
+        <button class="btn-vote btn-vote--tie" onclick="vote('tie')">
+          🤝 Tie
+        </button>
+        <button class="btn-vote btn-vote--right" onclick="vote('clip_b')">
+          Right 👉
+        </button>
+        <button class="btn-vote btn-vote--super" onclick="vote('super_b')">
+          Super Right ⭐
+        </button>
+      </div>
+
+      <div class="action-buttons">
+        <button class="btn-vote btn-vote--skip" onclick="vote('skip')">
+          Skip
+        </button>
+      </div>
+
+      <!-- Keyboard Shortcuts -->
+      <div class="shortcuts">
+        <span class="key">1</span> Left
+        <span class="key">2</span> Right
+        <span class="key">T</span> Tie
+        <span class="key">S</span> Skip
+        <span class="key">Shift+1</span> Super Left
+        <span class="key">Shift+2</span> Super Right
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Scripts -->
+  <script src="/js/app.js"></script>
+  <script src="/js/compare.js"></script>
+</body>
+</html>

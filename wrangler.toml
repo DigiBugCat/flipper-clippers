@@ -1,0 +1,16 @@
+name = "flipper-clippers"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+# Static assets from public folder
+[assets]
+directory = "public"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "clip-ranker-db"
+database_id = "7154d07b-e848-402a-a4e7-df008883bad4"
+
+[vars]
+TWITCH_CLIENT_ID = "bcsrqxz7j1ivepc5g2bfnreok2x2g0"

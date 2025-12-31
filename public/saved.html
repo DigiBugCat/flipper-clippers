@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Saved - Flipper Clippers</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="navbar-inner">
+      <a href="/" class="nav-brand">Flipper Clippers</a>
+      <div class="nav-links">
+        <a href="/compare" class="nav-link">Compare</a>
+        <a href="/leaderboard" class="nav-link">Leaderboard</a>
+        <a href="/saved" class="nav-link active">Saved</a>
+      </div>
+      <div class="nav-user" id="nav-user">
+        <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="container">
+    <!-- Auth Required State -->
+    <div id="auth-required" class="auth-required hidden">
+      <h2>Sign In to View Saved Clips</h2>
+      <p>You need to sign in with Twitch to view and manage your saved clips.</p>
+      <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+    </div>
+
+    <!-- Saved UI -->
+    <div id="saved-ui" class="hidden">
+      <div class="page-header">
+        <h1>Saved Clips</h1>
+        <p class="page-subtitle">Drag to reorder, use arrows, or type a rank number</p>
+      </div>
+
+      <!-- Loading State -->
+      <div class="loading" id="loading-state">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading saved clips...</div>
+      </div>
+
+      <!-- Empty State -->
+      <div id="empty-state" class="empty-state hidden">
+        <h3>No saved clips yet</h3>
+        <p>Save clips using the star button on the <a href="/compare">Compare</a> page.</p>
+      </div>
+
+      <!-- Saved Clips List -->
+      <div id="saved-list" class="saved-list hidden"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Scripts -->
+  <script src="/js/app.js"></script>
+  <script src="/js/saved.js"></script>
+</body>
+</html>
