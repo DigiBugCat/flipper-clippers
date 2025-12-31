@@ -32,8 +32,8 @@ export async function getNextPair(
     ratingMap.set(rating.clip_id, rating);
   }
 
-  // Get recently shown pairs to avoid
-  const recentPairs = await getRecentPairings(db, userId, 24);
+  // Get recently shown pairs to avoid (last 1 hour)
+  const recentPairs = await getRecentPairings(db, userId, 1);
 
   // Build clip list with ratings
   const clipsWithRatings: ClipWithRating[] = clips.map((clip) => ({
@@ -41,9 +41,8 @@ export async function getNextPair(
     userRating: ratingMap.get(clip.id) || null,
   }));
 
-  // Score all possible pairs and find the best one
-  let bestPair: { clipA: Clip; clipB: Clip } | null = null;
-  let bestScore = -Infinity;
+  // Score all possible pairs and collect candidates
+  const candidates: { clipA: Clip; clipB: Clip; score: number }[] = [];
 
   for (let i = 0; i < clipsWithRatings.length; i++) {
     for (let j = i + 1; j < clipsWithRatings.length; j++) {
@@ -60,12 +59,19 @@ export async function getNextPair(
 
       // Calculate pair score
       const score = calculatePairScore(a, b);
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestPair = { clipA: a.clip, clipB: b.clip };
-      }
+      candidates.push({ clipA: a.clip, clipB: b.clip, score });
     }
+  }
+
+  // Sort by score descending and pick randomly from top candidates
+  candidates.sort((a, b) => b.score - a.score);
+
+  let bestPair: { clipA: Clip; clipB: Clip } | null = null;
+  if (candidates.length > 0) {
+    // Pick randomly from top 20 candidates for variety
+    const topN = Math.min(20, candidates.length);
+    const randomIndex = Math.floor(Math.random() * topN);
+    bestPair = candidates[randomIndex];
   }
 
   // If all pairs have been shown recently, pick the least recently shown
@@ -106,11 +112,11 @@ function calculatePairScore(a: ClipWithRating, b: ClipWithRating): number {
   const bUnseen = b.userRating === null;
 
   // 1. HIGHEST PRIORITY: Unseen clips (user hasn't compared yet)
-  // Heavily prioritize showing clips the user hasn't seen
+  // Heavily prioritize showing clips the user hasn't seen to ensure full coverage
   if (aUnseen && bUnseen) {
-    score += 500; // Both unseen = highest priority
+    score += 1000; // Both unseen = highest priority - must see all clips!
   } else if (aUnseen || bUnseen) {
-    score += 300; // One unseen = high priority
+    score += 800; // One unseen = very high priority
   }
 
   // 2. HIGH PRIORITY: Globally unranked clips (few total comparisons)
