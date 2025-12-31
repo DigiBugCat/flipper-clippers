@@ -4,6 +4,17 @@ A Tinder-style clip ranking app for comparing and ranking Twitch clips. Users vo
 
 **Live at: [flipper-clippers.arross.tv](https://flipper-clippers.arross.tv)**
 
+## Screenshots
+
+### Homepage
+![Homepage](screenshots/homepage.png)
+
+### Compare Clips
+![Compare](screenshots/compare.png)
+
+### Leaderboard
+![Leaderboard](screenshots/leaderboard.png)
+
 ## Features
 
 - **Pairwise Comparison**: Vote on which clip is better, Tinder-style
