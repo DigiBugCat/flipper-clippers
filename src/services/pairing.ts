@@ -101,25 +101,46 @@ function calculatePairScore(a: ClipWithRating, b: ClipWithRating): number {
   const matchesA = a.userRating?.matches_played ?? 0;
   const matchesB = b.userRating?.matches_played ?? 0;
 
-  // 1. Uncertainty bonus (prioritize clips needing more data)
+  // Check if user has seen these clips
+  const aUnseen = a.userRating === null;
+  const bUnseen = b.userRating === null;
+
+  // 1. HIGHEST PRIORITY: Unseen clips (user hasn't compared yet)
+  // Heavily prioritize showing clips the user hasn't seen
+  if (aUnseen && bUnseen) {
+    score += 500; // Both unseen = highest priority
+  } else if (aUnseen || bUnseen) {
+    score += 300; // One unseen = high priority
+  }
+
+  // 2. HIGH PRIORITY: Globally unranked clips (few total comparisons)
+  // Prioritize clips that need more global data
+  const globalMatchesA = a.clip.global_matches ?? 0;
+  const globalMatchesB = b.clip.global_matches ?? 0;
+  const minGlobalMatches = Math.min(globalMatchesA, globalMatchesB);
+  if (minGlobalMatches < 10) {
+    score += (10 - minGlobalMatches) * 15; // Max 150 points
+  }
+
+  // 3. Uncertainty bonus (prioritize clips needing more data)
   // Higher deviation = more uncertain = more valuable to compare
   const avgDeviation = (deviationA + deviationB) / 2;
   score += avgDeviation * 0.5; // Max ~175 points
 
-  // 2. Rating similarity bonus (more informative when close)
+  // 4. Rating similarity bonus (more informative when close)
   // Comparing clips with similar ratings gives more information
   const ratingDiff = Math.abs(ratingA - ratingB);
   if (ratingDiff < 200) {
     score += 100 - ratingDiff / 2; // Max 100 points
   }
 
-  // 3. Low match count bonus (prioritize under-compared clips)
+  // 5. Low user match count bonus (prioritize under-compared clips for this user)
   const minMatches = Math.min(matchesA, matchesB);
   if (minMatches < 5) {
     score += (5 - minMatches) * 20; // Max 100 points
   }
 
-  // 4. Small random factor for variety
+  // 6. Small random factor for variety
   score += Math.random() * 20;
 
   return score;
