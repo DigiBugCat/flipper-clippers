@@ -102,8 +102,8 @@ function renderSavedClips() {
       </div>
 
       <div class="saved-item-info">
-        <div class="saved-item-title">${clip.title || clip.twitchSlug}</div>
-        <div class="saved-item-meta">Clipped by ${clip.clippedBy || 'Unknown'}</div>
+        <div class="saved-item-title">${escapeHtml(clip.title || clip.twitchSlug)}</div>
+        <div class="saved-item-meta">Clipped by ${escapeHtml(clip.clippedBy || 'Unknown')}</div>
       </div>
 
       <div class="saved-item-actions">

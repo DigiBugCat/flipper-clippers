@@ -2,6 +2,11 @@ name = "flipper-clippers"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
+# Custom domain
+routes = [
+  { pattern = "flipper-clippers.arross.tv", custom_domain = true }
+]
+
 # Static assets from public folder
 [assets]
 directory = "public"

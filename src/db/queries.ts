@@ -54,7 +54,7 @@ export async function incrementUserComparisons(db: D1Database, userId: number, i
 export async function createSession(db: D1Database, sessionId: string, userId: number, expiresAt: string): Promise<void> {
   await db
     .prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(sessionId, expiresAt, expiresAt)
+    .bind(sessionId, userId, expiresAt)
     .run();
 }
 

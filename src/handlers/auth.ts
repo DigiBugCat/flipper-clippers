@@ -32,8 +32,16 @@ function getRedirectUri(c: any): string {
   return `${url.origin}/api/auth/callback`;
 }
 
-// Dev mode login (bypasses Twitch OAuth)
+// Dev mode login (bypasses Twitch OAuth) - ONLY available on localhost
 auth.get('/dev-login', async (c) => {
+  // Security: Only allow dev login on localhost
+  const url = new URL(c.req.url);
+  const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+
+  if (!isLocalhost) {
+    return c.json({ error: 'Dev login is only available in local development' }, 403);
+  }
+
   // Create or get dev user
   const devTwitchId = 'dev-user-123';
   let user = await getUserByTwitchId(c.env.DB, devTwitchId);
@@ -59,10 +67,10 @@ auth.get('/dev-login', async (c) => {
     .bind(sessionId, user.id, expiresAt)
     .run();
 
-  // Set session cookie
+  // Set session cookie (secure: false only for localhost HTTP)
   setCookie(c, 'session', sessionId, {
     httpOnly: true,
-    secure: false, // Allow HTTP for local dev
+    secure: url.protocol === 'https:',
     sameSite: 'Lax',
     maxAge: 7 * 24 * 60 * 60,
     path: '/',
