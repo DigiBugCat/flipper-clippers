@@ -316,14 +316,15 @@ init();
 // Make functions available globally for inline onclick handlers
 declare global {
   interface Window {
-    switchTab: typeof switchTab;
+    // Note: switchTab is typed loosely to allow different page implementations
+    switchTab: (tab: string) => void | Promise<void>;
     loadMoreGlobal: typeof loadMoreGlobal;
     loadMoreMy: typeof loadMoreMy;
     loadTrending: typeof loadTrending;
   }
 }
 
-window.switchTab = switchTab;
+window.switchTab = switchTab as (tab: string) => void | Promise<void>;
 window.loadMoreGlobal = loadMoreGlobal;
 window.loadMoreMy = loadMoreMy;
 window.loadTrending = loadTrending;
