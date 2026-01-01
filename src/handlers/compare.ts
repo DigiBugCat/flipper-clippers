@@ -8,7 +8,7 @@ import {
   incrementUserComparisons,
   getUserClipRating,
   upsertUserClipRating,
-  getUserComparisons,
+  getUserComparisonsWithClips,
   getUserSuperLikedClips,
 } from '../db/queries';
 import { calculateNextPairs, getPairingStats, type PairIds } from '../services/pairing';
@@ -20,6 +20,7 @@ import {
 } from '../services/rating';
 import { updateRollupForVote } from '../services/aggregation';
 import { getCachedSession } from './auth';
+import { recordActivity, isUserProfilePublic } from '../services/feed';
 
 // Cookie name for pre-calculated pairs
 const PENDING_PAIRS_COOKIE = 'pending_pairs';
@@ -373,6 +374,22 @@ compare.post('/vote', requireAuth, async (c) => {
     // Increment user comparison count
     const isSuperLike = isSuperLikeResult(body.result);
     await incrementUserComparisons(c.env.DB, userId, isSuperLike);
+
+    // Record activity to feed (respects user privacy setting)
+    if (body.result !== 'skip') {
+      const user = c.get('user');
+      const activityType = isSuperLike ? 'super_like' : 'vote';
+      const winnerClip = body.result.includes('a') ? clipA : clipB;
+      await recordActivity(
+        c.env.DB,
+        userId,
+        activityType,
+        winnerClip.id,
+        winnerClip.title,
+        { result: body.result, clipA: clipA.id, clipB: clipB.id },
+        user.is_profile_public === 1
+      );
+    }
   } catch (error) {
     console.error(`[COMPARE] Vote processing failed for user=${userId}:`, error);
     return c.json({ error: 'Vote processing failed' }, 500);
@@ -406,29 +423,23 @@ compare.get('/stats', requireAuth, async (c) => {
   });
 });
 
-// Get user's comparison history
+// Get user's comparison history (optimized with single JOIN query)
 compare.get('/history', requireAuth, async (c) => {
   const userId = c.get('userId');
   const limit = parseInt(c.req.query('limit') ?? '50', 10);
 
-  const comparisons = await getUserComparisons(c.env.DB, userId, limit);
+  // Single JOIN query instead of N+1 individual queries
+  const comparisons = await getUserComparisonsWithClips(c.env.DB, userId, limit);
 
-  // Enrich with clip data
-  const enriched = await Promise.all(
-    comparisons.map(async (comp) => {
-      const clipA = await getClipById(c.env.DB, comp.clip_a_id);
-      const clipB = await getClipById(c.env.DB, comp.clip_b_id);
-      return {
-        id: comp.id,
-        clipA: clipA ? { id: clipA.id, title: clipA.title, slug: clipA.twitch_slug } : null,
-        clipB: clipB ? { id: clipB.id, title: clipB.title, slug: clipB.twitch_slug } : null,
-        result: comp.result,
-        createdAt: comp.created_at,
-      };
-    })
-  );
-
-  return c.json({ comparisons: enriched });
+  return c.json({
+    comparisons: comparisons.map((comp) => ({
+      id: comp.id,
+      clipA: { id: comp.clipA_id, title: comp.clipA_title, slug: comp.clipA_slug },
+      clipB: { id: comp.clipB_id, title: comp.clipB_title, slug: comp.clipB_slug },
+      result: comp.result,
+      createdAt: comp.created_at,
+    })),
+  });
 });
 
 // Get user's super liked clips

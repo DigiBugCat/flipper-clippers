@@ -50,6 +50,13 @@ export async function incrementUserComparisons(db: D1Database, userId: number, i
   }
 }
 
+export async function updateUserPrivacy(db: D1Database, userId: number, isPublic: boolean): Promise<void> {
+  await db
+    .prepare('UPDATE users SET is_profile_public = ? WHERE id = ?')
+    .bind(isPublic ? 1 : 0, userId)
+    .run();
+}
+
 // Session queries
 export async function createSession(db: D1Database, sessionId: string, userId: number, expiresAt: string): Promise<void> {
   await db
@@ -144,6 +151,48 @@ export async function getUserComparisons(db: D1Database, userId: number, limit =
     .prepare('SELECT * FROM comparisons WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
     .bind(userId, limit)
     .all<Comparison>();
+  return result.results;
+}
+
+// Enriched comparison with clip data (single JOIN query instead of N+1)
+export interface EnrichedComparison {
+  id: number;
+  result: string;
+  created_at: string;
+  clipA_id: number;
+  clipA_title: string | null;
+  clipA_slug: string;
+  clipB_id: number;
+  clipB_title: string | null;
+  clipB_slug: string;
+}
+
+export async function getUserComparisonsWithClips(
+  db: D1Database,
+  userId: number,
+  limit = 50
+): Promise<EnrichedComparison[]> {
+  const result = await db
+    .prepare(
+      `SELECT
+         c.id,
+         c.result,
+         c.created_at,
+         ca.id as clipA_id,
+         ca.title as clipA_title,
+         ca.twitch_slug as clipA_slug,
+         cb.id as clipB_id,
+         cb.title as clipB_title,
+         cb.twitch_slug as clipB_slug
+       FROM comparisons c
+       JOIN clips ca ON c.clip_a_id = ca.id
+       JOIN clips cb ON c.clip_b_id = cb.id
+       WHERE c.user_id = ?
+       ORDER BY c.created_at DESC
+       LIMIT ?`
+    )
+    .bind(userId, limit)
+    .all<EnrichedComparison>();
   return result.results;
 }
 
@@ -448,6 +497,29 @@ export async function isClipSaved(db: D1Database, userId: number, clipId: number
     .bind(userId, clipId)
     .first();
   return result !== null;
+}
+
+// Batch check multiple clips at once (single query instead of N queries)
+export async function areClipsSaved(
+  db: D1Database,
+  userId: number,
+  clipIds: number[]
+): Promise<Record<number, boolean>> {
+  if (clipIds.length === 0) return {};
+
+  // Build parameterized IN clause
+  const placeholders = clipIds.map(() => '?').join(',');
+  const result = await db
+    .prepare(`SELECT clip_id FROM saved_clips WHERE user_id = ? AND clip_id IN (${placeholders})`)
+    .bind(userId, ...clipIds)
+    .all<{ clip_id: number }>();
+
+  const savedSet = new Set(result.results.map((r) => r.clip_id));
+  const results: Record<number, boolean> = {};
+  for (const clipId of clipIds) {
+    results[clipId] = savedSet.has(clipId);
+  }
+  return results;
 }
 
 export async function saveClip(db: D1Database, userId: number, clipId: number): Promise<void> {

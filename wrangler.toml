@@ -2,10 +2,9 @@ name = "flipper-clippers"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
-# Custom domains
+# Custom domain
 routes = [
-  { pattern = "flipper-clippers.arross.tv", custom_domain = true },
-  { pattern = "clipdle.arross.tv", custom_domain = true }
+  { pattern = "flipper-clippers.arross.tv", custom_domain = true }
 ]
 
 # Static assets from public folder
@@ -35,4 +34,8 @@ TWITCH_CLIENT_ID = "bcsrqxz7j1ivepc5g2bfnreok2x2g0"
 # Scheduled triggers for daily clip sync
 [triggers]
 crons = ["0 0 * * *"]  # Daily at midnight UTC
+
+# Smart Placement: Run worker closer to D1 database (WNAM region)
+[placement]
+mode = "smart"
 

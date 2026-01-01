@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
-import type { Env } from '../types';
+import type { Env, Clip } from '../types';
 import {
   getGlobalLeaderboard,
   getUserLeaderboard,
@@ -25,7 +25,52 @@ const leaderboard = new Hono<{ Bindings: Env }>();
 const VALID_SORT_FIELDS: SortField[] = ['elo', 'matches', 'winrate', 'superlikes'];
 const VALID_SORT_ORDERS: SortOrder[] = ['asc', 'desc'];
 
-// Get global leaderboard
+// SWR cache settings
+const LEADERBOARD_CACHE_TTL = 120; // 2 minutes total cache time
+const LEADERBOARD_STALE_AFTER = 60; // Consider stale after 1 minute
+
+interface CachedLeaderboard {
+  data: unknown;
+  timestamp: number;
+}
+
+// Helper to generate leaderboard response
+async function generateLeaderboardResponse(
+  db: D1Database,
+  limit: number,
+  offset: number,
+  sort: SortField,
+  order: SortOrder
+) {
+  // Run aggregation if needed
+  await aggregateGlobalRankings(db);
+
+  const { clips, total } = await getGlobalLeaderboard(db, limit, offset, sort, order);
+  const totalPages = Math.ceil(total / limit);
+
+  const ranked = clips.map((clip, index) => ({
+    rank: offset + index + 1,
+    id: clip.id,
+    twitchSlug: clip.twitch_slug,
+    title: clip.title,
+    twitchUrl: clip.twitch_url,
+    elo: Math.round(clip.global_elo),
+    matches: clip.global_matches,
+    wins: clip.global_wins,
+    losses: clip.global_losses,
+    ties: clip.global_ties,
+    superLikes: clip.global_super_likes,
+    winRate: clip.global_matches > 0 ? Math.round((clip.global_wins / clip.global_matches) * 100) : 0,
+    confidence: Math.round(calculateConfidence(clip.global_matches, clip.rating_deviation)),
+  }));
+
+  return {
+    leaderboard: ranked,
+    pagination: { page: Math.floor(offset / limit) + 1, limit, total, totalPages },
+  };
+}
+
+// Get global leaderboard with Stale-While-Revalidate pattern
 leaderboard.get('/', async (c) => {
   const page = Math.max(1, parseInt(c.req.query('page') ?? '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') ?? '50', 10)));
@@ -44,41 +89,65 @@ leaderboard.get('/', async (c) => {
   console.log(`[LEADERBOARD] GET / page=${page} limit=${limit} sort=${sort} order=${order}`);
   const startTime = Date.now();
 
-  // Lazy aggregation: update global rankings on cache miss
-  await aggregateGlobalRankings(c.env.DB);
+  // Build cache key based on query params
+  const cacheKey = `leaderboard:${page}:${limit}:${sort}:${order}`;
 
-  const { clips, total } = await getGlobalLeaderboard(c.env.DB, limit, offset, sort, order);
-  const totalPages = Math.ceil(total / limit);
+  // Try KV cache first
+  const cached = await c.env.SESSION_CACHE.get<CachedLeaderboard>(cacheKey, 'json');
+  const now = Date.now();
 
-  console.log(`[LEADERBOARD] GET / returned ${clips.length} clips in ${Date.now() - startTime}ms`);
+  if (cached) {
+    const age = now - cached.timestamp;
+    const isStale = age > LEADERBOARD_STALE_AFTER * 1000;
 
-  const ranked = clips.map((clip, index) => ({
-    rank: offset + index + 1,
-    id: clip.id,
-    twitchSlug: clip.twitch_slug,
-    title: clip.title,
-    twitchUrl: clip.twitch_url,
-    elo: Math.round(clip.global_elo),
-    matches: clip.global_matches,
-    wins: clip.global_wins,
-    losses: clip.global_losses,
-    ties: clip.global_ties,
-    superLikes: clip.global_super_likes,
-    winRate: clip.global_matches > 0 ? Math.round((clip.global_wins / clip.global_matches) * 100) : 0,
-    confidence: Math.round(calculateConfidence(clip.global_matches, clip.rating_deviation)),
-  }));
+    if (isStale) {
+      // Stale-While-Revalidate: return stale data, refresh in background
+      console.log(`[LEADERBOARD] SWR: serving stale (${Math.round(age / 1000)}s old), refreshing in background`);
+      c.executionCtx.waitUntil(
+        (async () => {
+          try {
+            const fresh = await generateLeaderboardResponse(c.env.DB, limit, offset, sort, order);
+            await c.env.SESSION_CACHE.put(
+              cacheKey,
+              JSON.stringify({ data: fresh, timestamp: Date.now() }),
+              { expirationTtl: LEADERBOARD_CACHE_TTL }
+            );
+            console.log(`[LEADERBOARD] Background refresh completed`);
+          } catch (err) {
+            console.error(`[LEADERBOARD] Background refresh failed:`, err);
+          }
+        })()
+      );
 
-  // CF CDN cache for 1 minute (lazy aggregation runs on cache miss)
+      // Return stale data immediately
+      c.header('X-Cache', 'STALE');
+      c.header('Cache-Control', 'public, s-maxage=30');
+      console.log(`[LEADERBOARD] GET / served stale in ${Date.now() - startTime}ms`);
+      return c.json(cached.data);
+    }
+
+    // Fresh cache hit
+    console.log(`[LEADERBOARD] Cache HIT (${Math.round(age / 1000)}s old) in ${Date.now() - startTime}ms`);
+    c.header('X-Cache', 'HIT');
+    c.header('Cache-Control', 'public, s-maxage=60');
+    return c.json(cached.data);
+  }
+
+  // Cache miss - generate fresh data
+  console.log(`[LEADERBOARD] Cache MISS, generating fresh data...`);
+  const data = await generateLeaderboardResponse(c.env.DB, limit, offset, sort, order);
+
+  // Store in KV cache
+  await c.env.SESSION_CACHE.put(
+    cacheKey,
+    JSON.stringify({ data, timestamp: now }),
+    { expirationTtl: LEADERBOARD_CACHE_TTL }
+  );
+
+  console.log(`[LEADERBOARD] GET / generated fresh in ${Date.now() - startTime}ms`);
+  c.header('X-Cache', 'MISS');
   c.header('Cache-Control', 'public, s-maxage=60');
-  return c.json({
-    leaderboard: ranked,
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages,
-    },
-  });
+  return c.json(data);
 });
 
 // Get user's personal leaderboard
@@ -167,12 +236,12 @@ leaderboard.get('/stats', async (c) => {
 // Get top clips summary (for homepage)
 leaderboard.get('/top', async (c) => {
   const limit = parseInt(c.req.query('limit') ?? '10', 10);
-  const clips = await getGlobalLeaderboard(c.env.DB, limit, 0);
+  const { clips } = await getGlobalLeaderboard(c.env.DB, limit, 0);
 
   // CF CDN cache for 5 minutes
   c.header('Cache-Control', 'public, s-maxage=300');
   return c.json({
-    topClips: clips.map((clip, index) => ({
+    topClips: clips.map((clip: Clip, index: number) => ({
       rank: index + 1,
       id: clip.id,
       twitchSlug: clip.twitch_slug,

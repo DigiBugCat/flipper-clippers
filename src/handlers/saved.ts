@@ -6,11 +6,13 @@ import {
   getClipById,
   getSavedClips,
   isClipSaved,
+  areClipsSaved,
   saveClip,
   unsaveClip,
   reorderSavedClip,
 } from '../db/queries';
 import { getCachedSession } from './auth';
+import { recordActivity } from '../services/feed';
 
 // Extended context type with user variables
 type Variables = {
@@ -74,7 +76,7 @@ saved.get('/check/:clipId', requireAuth, async (c) => {
   return c.json({ saved: isSaved });
 });
 
-// Check multiple clips at once (for compare page)
+// Check multiple clips at once (for compare page) - single query instead of N queries
 saved.post('/check-multiple', requireAuth, async (c) => {
   const userId = c.get('userId');
   const body = await c.req.json<{ clipIds: number[] }>();
@@ -83,10 +85,8 @@ saved.post('/check-multiple', requireAuth, async (c) => {
     return c.json({ error: 'Invalid clip IDs' }, 400);
   }
 
-  const results: Record<number, boolean> = {};
-  for (const clipId of body.clipIds) {
-    results[clipId] = await isClipSaved(c.env.DB, userId, clipId);
-  }
+  // Single batch query instead of N individual queries
+  const results = await areClipsSaved(c.env.DB, userId, body.clipIds);
 
   return c.json({ saved: results });
 });
@@ -107,6 +107,18 @@ saved.post('/:clipId', requireAuth, async (c) => {
   }
 
   await saveClip(c.env.DB, userId, clipId);
+
+  // Record activity to feed
+  const user = c.get('user');
+  await recordActivity(
+    c.env.DB,
+    userId,
+    'save',
+    clipId,
+    clip.title,
+    null,
+    user.is_profile_public === 1
+  );
 
   console.log(`[ACTIVITY] user=${userId} action=save clipId=${clipId}`);
   return c.json({ success: true });
