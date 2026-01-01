@@ -15,6 +15,38 @@ A Tinder-style clip ranking app for comparing and ranking Twitch clips. Users vo
 ### Leaderboard
 ![Leaderboard](screenshots/leaderboard.png)
 
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Edge["Cloudflare Edge Network"]
+        CDN["CDN Cache"]
+        Worker["Hono Worker"]
+        KV["KV Store"]
+    end
+
+    subgraph Storage["Cloudflare D1"]
+        DB[(SQLite DB)]
+    end
+
+    Browser["Browser"] --> CDN
+    CDN --> Worker
+    Worker <--> KV
+    Worker <--> DB
+    Worker <--> Twitch["Twitch API"]
+    Cron["⏰ Cron Trigger"] --> Worker
+```
+
+### Serverless-First Design
+
+This app is optimized for edge computing on Cloudflare's global network:
+
+- **Edge Computing**: Runs on Cloudflare Workers at 300+ locations worldwide for low-latency responses
+- **Multi-Layer Caching**: CDN caching for API responses, KV for sessions and thumbnails
+- **D1 Database**: SQLite-based serverless database with automatic replication
+- **Cron Triggers**: Background aggregation of global rankings runs every 5 minutes
+- **Cookie-Based Batching**: Pre-calculates comparison pairs to minimize database queries
+
 ## Features
 
 - **Pairwise Comparison**: Vote on which clip is better, Tinder-style
@@ -46,7 +78,7 @@ A Tinder-style clip ranking app for comparing and ranking Twitch clips. Users vo
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/flipper-clippers.git
+   git clone https://github.com/DigiBugCat/flipper-clippers.git
    cd flipper-clippers
    ```
 
