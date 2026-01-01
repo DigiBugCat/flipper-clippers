@@ -37,20 +37,16 @@ export async function aggregateGlobalRankings(db: D1Database): Promise<void> {
   console.log('[AGGREGATION] Starting global rankings aggregation...');
   const startTime = Date.now();
 
-  // Check rollup freshness
-  const oldestRollup = await db
-    .prepare('SELECT MIN(last_updated_at) as oldest FROM clip_rating_rollups')
-    .first<{ oldest: string | null }>();
+  // Check rollup freshness (single query instead of two)
+  const rollupStatus = await db
+    .prepare('SELECT COUNT(*) as count, MIN(last_updated_at) as oldest FROM clip_rating_rollups')
+    .first<{ count: number; oldest: string | null }>();
 
-  const rollupCount = await db
-    .prepare('SELECT COUNT(*) as count FROM clip_rating_rollups')
-    .first<{ count: number }>();
-
-  const hasRollups = (rollupCount?.count ?? 0) > 0;
+  const hasRollups = (rollupStatus?.count ?? 0) > 0;
   let isStale = true;
 
-  if (hasRollups && oldestRollup?.oldest) {
-    const oldestTime = new Date(oldestRollup.oldest).getTime();
+  if (hasRollups && rollupStatus?.oldest) {
+    const oldestTime = new Date(rollupStatus.oldest).getTime();
     const now = Date.now();
     const ageMinutes = (now - oldestTime) / 1000 / 60;
     isStale = ageMinutes > ROLLUP_STALE_MINUTES;
