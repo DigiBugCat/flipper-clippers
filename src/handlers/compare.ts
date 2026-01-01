@@ -11,6 +11,7 @@ import {
   getUserComparisonsWithClips,
   getUserSuperLikedClips,
   getUserById,
+  createComparison,
 } from '../db/queries';
 import { calculateNextPairs, getPairingStats, type PairIds } from '../services/pairing';
 import {
@@ -445,7 +446,6 @@ compare.post('/vote', requireAuth, async (c) => {
     const winnerId = getWinnerFromResult(body.result, clipA.id, clipB.id);
 
     // Write to Analytics Engine (non-blocking, fire-and-forget)
-    // This is the primary audit log for comparisons
     c.env.VOTES_ANALYTICS?.writeDataPoint({
       indexes: [body.result],
       blobs: [
@@ -456,8 +456,16 @@ compare.post('/vote', requireAuth, async (c) => {
       doubles: [userId, clipA.id, clipB.id, Date.now(), body.time_spent_ms ?? 0],
     });
 
-    // Note: D1 comparisons table write removed - Analytics Engine is primary audit log
-    // Saves 1 D1 write per vote
+    // Store comparison in D1 for history and ELO recalculation on delete
+    await createComparison(
+      c.env.DB,
+      userId,
+      clipA.id,
+      clipB.id,
+      winnerId,
+      body.result,
+      body.time_spent_ms ?? null
+    );
 
     // Increment user comparison count
     // Queue handles this if available, otherwise do it sync
