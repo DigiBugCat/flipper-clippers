@@ -25,17 +25,16 @@ const clips = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // In-memory store for binary search sessions (in production, use KV or D1)
 // Map of `${userId}-${clipId}` -> session state
-const rankingSessions = new Map<
-  string,
-  {
-    clipId: number;
-    sortedClips: { id: number; elo: number }[];
-    low: number;
-    high: number;
-    step: number;
-    totalSteps: number;
-  }
->();
+export type RankingSession = {
+  clipId: number;
+  sortedClips: { id: number; elo: number }[];
+  low: number;
+  high: number;
+  step: number;
+  totalSteps: number;
+};
+
+export const rankingSessions = new Map<string, RankingSession>();
 
 // Auth middleware
 async function requireAuth(c: Context<{ Bindings: Env; Variables: Variables }>, next: Next) {

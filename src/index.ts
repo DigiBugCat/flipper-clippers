@@ -36,4 +36,13 @@ app.post('/api/aggregate', async (c) => {
 // Static files are handled by Wrangler's [assets] configuration
 // See wrangler.toml: [assets] directory = "public"
 
-export default app;
+// Export with scheduled handler for cron triggers
+export default {
+  fetch: app.fetch,
+
+  // Cron trigger - runs every 5 minutes (see wrangler.toml)
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    console.log('Cron triggered: aggregating global rankings...');
+    ctx.waitUntil(aggregateGlobalRankings(env.DB));
+  },
+};

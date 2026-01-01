@@ -10,6 +10,11 @@ let startTime = null;
 let isLoading = false;
 let savedStates = { a: false, b: false };
 
+// Ranking mode state
+let isRankingMode = false;
+let rankingClipId = null;
+let rankingClip = null;
+
 /**
  * Update the browser URL with current clip IDs
  */
@@ -283,6 +288,12 @@ async function loadNextPair() {
 async function vote(result) {
   if (isLoading || !clipA || !clipB) return;
 
+  // Handle ranking mode separately
+  if (isRankingMode) {
+    await submitRankingVote(result);
+    return;
+  }
+
   isLoading = true;
 
   try {
@@ -341,6 +352,168 @@ function showLoading(show) {
 }
 
 /**
+ * Initialize ranking mode
+ */
+async function initRankingMode(clipId) {
+  isRankingMode = true;
+  rankingClipId = clipId;
+
+  showLoading(true);
+
+  try {
+    // Get the ranking session state
+    const response = await fetch(`/api/clips/rank-session/${clipId}`);
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        showToast('Ranking session not found or expired', 'error');
+        window.location.href = '/leaderboard';
+        return;
+      }
+      throw new Error('Failed to load ranking session');
+    }
+
+    const data = await response.json();
+    rankingClip = data.clipToRank;
+
+    // Update UI for ranking mode
+    updateRankingModeUI(data);
+
+    // Display the clips
+    displayRankingComparison(data.clipToRank, data.compareWith, data.progress);
+
+    showLoading(false);
+  } catch (error) {
+    console.error('Failed to initialize ranking mode:', error);
+    showToast('Failed to load ranking session', 'error');
+    showLoading(false);
+  }
+}
+
+/**
+ * Update UI elements for ranking mode
+ */
+function updateRankingModeUI(data) {
+  // Hide skip button in ranking mode
+  const skipBtn = document.querySelector('.btn-vote--skip');
+  if (skipBtn) {
+    skipBtn.parentElement.style.display = 'none';
+  }
+
+  // Update page title/header if there's a progress indicator
+  const progressEl = document.getElementById('ranking-progress');
+  if (progressEl && data.progress) {
+    progressEl.textContent = `Step ${data.progress.step} of ${data.progress.totalSteps}`;
+    progressEl.classList.remove('hidden');
+  }
+
+  // Update shortcuts to reflect ranking mode
+  const shortcuts = document.querySelector('.shortcuts');
+  if (shortcuts) {
+    shortcuts.innerHTML = `
+      <span class="key">1</span> New clip is better
+      <span class="key">2</span> Existing clip is better
+      <span class="key">T</span> Tie
+    `;
+  }
+}
+
+/**
+ * Display clips for ranking comparison
+ */
+function displayRankingComparison(clipToRank, compareWith, progress) {
+  clipA = clipToRank;
+  clipB = compareWith;
+  startTime = Date.now();
+
+  // Update titles
+  const titleA = document.getElementById('title-a');
+  const titleB = document.getElementById('title-b');
+  if (titleA) titleA.textContent = (clipToRank?.title || clipToRank?.twitchSlug) + ' (NEW)';
+  if (titleB) titleB.textContent = compareWith?.title || compareWith?.twitchSlug;
+
+  // Clear clipped by (not available in ranking session data)
+  const clippedByA = document.getElementById('clipped-by-a');
+  const clippedByB = document.getElementById('clipped-by-b');
+  if (clippedByA) clippedByA.textContent = '';
+  if (clippedByB) clippedByB.textContent = '';
+
+  // Clear clipped at
+  const clippedAtA = document.getElementById('clipped-at-a');
+  const clippedAtB = document.getElementById('clipped-at-b');
+  if (clippedAtA) clippedAtA.textContent = '';
+  if (clippedAtB) clippedAtB.textContent = '';
+
+  // Update links
+  const linkA = document.getElementById('link-a');
+  const linkB = document.getElementById('link-b');
+  if (linkA && clipToRank) linkA.href = clipToRank.twitchUrl || `https://clips.twitch.tv/${clipToRank.twitchSlug}`;
+  if (linkB && compareWith) linkB.href = compareWith.twitchUrl || `https://clips.twitch.tv/${compareWith.twitchSlug}`;
+
+  // Create embeds
+  if (clipToRank) createTwitchEmbed(clipToRank.twitchSlug, 'video-wrapper-a');
+  if (compareWith) createTwitchEmbed(compareWith.twitchSlug, 'video-wrapper-b');
+
+  // Update progress indicator
+  const progressEl = document.getElementById('ranking-progress');
+  if (progressEl && progress) {
+    progressEl.textContent = `Step ${progress.step} of ${progress.totalSteps}`;
+  }
+}
+
+/**
+ * Submit a ranking vote
+ */
+async function submitRankingVote(result) {
+  if (isLoading) return;
+
+  isLoading = true;
+  showLoading(true);
+
+  // Map vote result to ranking result
+  let rankingResult;
+  if (result === 'clip_a' || result === 'super_a') {
+    rankingResult = 'submitted'; // New clip is better
+  } else if (result === 'clip_b' || result === 'super_b') {
+    rankingResult = 'existing'; // Existing clip is better
+  } else {
+    rankingResult = 'tie';
+  }
+
+  try {
+    const response = await fetch(`/api/clips/rank-session/${rankingClipId}/vote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result: rankingResult }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to submit ranking vote');
+    }
+
+    const data = await response.json();
+
+    if (data.done) {
+      // Ranking complete!
+      showToast(`Clip ranked at position #${data.finalPosition}!`, 'success');
+      setTimeout(() => {
+        window.location.href = '/leaderboard?tab=personal';
+      }, 1500);
+    } else {
+      // Continue with next comparison
+      displayRankingComparison(rankingClip, data.compareWith, data.progress);
+      showLoading(false);
+    }
+  } catch (error) {
+    console.error('Failed to submit ranking vote:', error);
+    showToast('Failed to submit vote', 'error');
+    showLoading(false);
+  } finally {
+    isLoading = false;
+  }
+}
+
+/**
  * Initialize the compare page
  */
 async function initComparePage() {
@@ -360,8 +533,19 @@ async function initComparePage() {
 
   await loadStats();
 
-  // Check URL params for specific pair
+  // Check URL params
   const params = new URLSearchParams(window.location.search);
+
+  // Check for ranking mode
+  const rankClipId = params.get('rank');
+  if (rankClipId) {
+    await initRankingMode(rankClipId);
+    // Set up keyboard shortcuts for ranking mode
+    document.addEventListener('keydown', handleKeyboard);
+    return;
+  }
+
+  // Check for specific pair
   const clipAId = params.get('a');
   const clipBId = params.get('b');
 

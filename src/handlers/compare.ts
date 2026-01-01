@@ -229,12 +229,8 @@ compare.post('/vote', requireAuth, async (c) => {
   const isSuperLike = isSuperLikeResult(body.result);
   await incrementUserComparisons(c.env.DB, userId, isSuperLike);
 
-  // Periodically aggregate global rankings (every 3 comparisons)
-  const user = c.get('user');
-  if ((user.total_comparisons + 1) % 3 === 0) {
-    // Run aggregation in background (don't await)
-    c.executionCtx.waitUntil(aggregateGlobalRankings(c.env.DB));
-  }
+  // Global aggregation now runs via Cron Trigger (see wrangler.toml)
+  // No longer triggered by user votes to prevent timeouts
 
   return c.json({
     success: true,

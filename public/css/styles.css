@@ -1127,8 +1127,65 @@ tr:hover td {
   color: var(--purple);
 }
 
+/* === RESPONSIVE LABELS === */
+.label-mobile {
+  display: none;
+}
+
+/* === ADD BUTTON (Leaderboard) === */
+.action-column {
+  width: 60px;
+  text-align: center;
+}
+
+.btn-add {
+  background: var(--purple);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  width: 32px;
+  height: 32px;
+  font-size: 1.25rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-add:hover:not(:disabled) {
+  background: var(--purple-dark);
+  transform: scale(1.1);
+}
+
+.btn-add:disabled {
+  background: var(--text-muted);
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* === RANKING PROGRESS === */
+.ranking-progress {
+  text-align: center;
+  padding: var(--space-md);
+  background: var(--purple);
+  color: white;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-lg);
+  font-weight: 600;
+}
+
 /* === RESPONSIVE === */
 @media (max-width: 900px) {
+  .label-desktop {
+    display: none;
+  }
+
+  .label-mobile {
+    display: inline;
+  }
+
   .comparison-container {
     grid-template-columns: 1fr;
     gap: var(--space-md);

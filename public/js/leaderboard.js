@@ -68,7 +68,7 @@ async function loadGlobalRankings() {
     if (data.leaderboard.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="5" class="empty-state">
+          <td colspan="6" class="empty-state">
             No rankings yet. Be the first to <a href="/compare">start comparing</a>!
           </td>
         </tr>
@@ -92,6 +92,13 @@ async function loadGlobalRankings() {
           </td>
           <td>${formatNumber(entry.matches)}</td>
           <td>${formatNumber(entry.superLikes)}</td>
+          <td class="action-column">
+            ${currentUser ? `
+              <button class="btn-add" id="add-btn-${entry.id}" onclick="addToPersonalRankings(${entry.id})" title="Add to My Rankings">
+                +
+              </button>
+            ` : ''}
+          </td>
         </tr>
       `).join('');
     }
@@ -100,6 +107,63 @@ async function loadGlobalRankings() {
     showToast('Failed to load rankings', 'error');
   } finally {
     showLoading(false);
+  }
+}
+
+/**
+ * Add a clip to personal rankings
+ */
+async function addToPersonalRankings(clipId) {
+  if (!currentUser) {
+    showToast('Sign in to add clips to your rankings', 'error');
+    return;
+  }
+
+  const btn = document.getElementById(`add-btn-${clipId}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+  }
+
+  try {
+    const response = await fetch(`/api/leaderboard/add/${clipId}`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to add clip');
+    }
+
+    const data = await response.json();
+
+    if (data.alreadyRanked) {
+      showToast('This clip is already in your rankings!', 'info');
+      if (btn) {
+        btn.textContent = '✓';
+        btn.disabled = true;
+      }
+      return;
+    }
+
+    if (data.needsRanking) {
+      // Redirect to compare page in ranking mode
+      showToast('Redirecting to rank this clip...', 'info');
+      window.location.href = `/compare?rank=${clipId}`;
+    } else {
+      // Clip was added directly
+      showToast('Clip added to your rankings!', 'success');
+      if (btn) {
+        btn.textContent = '✓';
+        btn.disabled = true;
+      }
+    }
+  } catch (error) {
+    console.error('Failed to add clip:', error);
+    showToast('Failed to add clip to rankings', 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '+';
+    }
   }
 }
 

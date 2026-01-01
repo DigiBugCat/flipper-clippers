@@ -19,3 +19,7 @@ database_id = "7154d07b-e848-402a-a4e7-df008883bad4"
 
 [vars]
 TWITCH_CLIENT_ID = "bcsrqxz7j1ivepc5g2bfnreok2x2g0"
+
+# Cron Triggers - runs aggregation every 5 minutes
+[triggers]
+crons = ["*/5 * * * *"]

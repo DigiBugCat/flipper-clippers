@@ -8,9 +8,14 @@ import {
   getUserLeaderboard,
   initializeManualPositions,
   reorderPersonalRanking,
+  getUserClipsSortedByElo,
+  getUserClipRating,
+  upsertUserClipRating,
+  getClipById,
 } from '../db/queries';
 import { calculateConfidence } from '../services/rating';
 import { getAggregationStats } from '../services/aggregation';
+import { rankingSessions } from './clips';
 
 const leaderboard = new Hono<{ Bindings: Env }>();
 
@@ -129,6 +134,109 @@ leaderboard.get('/top', async (c) => {
       elo: Math.round(clip.global_elo),
       superLikes: clip.global_super_likes,
     })),
+  });
+});
+
+// Add a clip to personal rankings (starts ranking session if needed)
+leaderboard.post('/add/:clipId', async (c) => {
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: 'Authentication required' }, 401);
+  }
+
+  const session = await getSession(c.env.DB, sessionId);
+  if (!session) {
+    return c.json({ error: 'Invalid session' }, 401);
+  }
+
+  const clipId = parseInt(c.req.param('clipId'), 10);
+  if (isNaN(clipId)) {
+    return c.json({ error: 'Invalid clip ID' }, 400);
+  }
+
+  const userId = session.user_id;
+
+  // Get the clip
+  const clip = await getClipById(c.env.DB, clipId);
+  if (!clip) {
+    return c.json({ error: 'Clip not found' }, 404);
+  }
+
+  // Check if user already has this clip in their rankings
+  const existingRating = await getUserClipRating(c.env.DB, userId, clipId);
+  if (existingRating) {
+    return c.json({
+      success: true,
+      alreadyRanked: true,
+      message: 'This clip is already in your rankings!',
+    });
+  }
+
+  // Get user's ranked clips to determine if binary search is needed
+  const userClips = await getUserClipsSortedByElo(c.env.DB, userId);
+
+  // If user has fewer than 3 ranked clips, just place at middle ELO
+  if (userClips.length < 3) {
+    await upsertUserClipRating(
+      c.env.DB,
+      userId,
+      clipId,
+      1500, // Middle ELO
+      0, // matches
+      0, // wins
+      0, // losses
+      0, // ties
+      0, // super liked
+      350 // deviation
+    );
+
+    return c.json({
+      success: true,
+      needsRanking: false,
+      message: 'Clip added to your rankings!',
+    });
+  }
+
+  // Start binary search session
+  const totalSteps = Math.ceil(Math.log2(userClips.length));
+  const sessionKey = `${userId}-${clipId}`;
+
+  rankingSessions.set(sessionKey, {
+    clipId: clipId,
+    sortedClips: userClips.map((c) => ({ id: c.id, elo: c.user_elo })),
+    low: 0,
+    high: userClips.length - 1,
+    step: 1,
+    totalSteps,
+  });
+
+  // Return first comparison
+  const mid = Math.floor((0 + userClips.length - 1) / 2);
+  const compareClip = await getClipById(c.env.DB, userClips[mid].id);
+
+  return c.json({
+    success: true,
+    needsRanking: true,
+    rankingSession: {
+      clipToRank: {
+        id: clip.id,
+        twitchSlug: clip.twitch_slug,
+        title: clip.title,
+        twitchUrl: clip.twitch_url,
+      },
+      compareWith: compareClip
+        ? {
+            id: compareClip.id,
+            twitchSlug: compareClip.twitch_slug,
+            title: compareClip.title,
+            twitchUrl: compareClip.twitch_url,
+          }
+        : null,
+      progress: {
+        step: 1,
+        totalSteps,
+      },
+    },
   });
 });
 

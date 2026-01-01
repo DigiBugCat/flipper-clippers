@@ -47,6 +47,9 @@
         </div>
       </div>
 
+      <!-- Ranking Progress (shown in ranking mode) -->
+      <div id="ranking-progress" class="ranking-progress hidden"></div>
+
       <!-- Comparison Container -->
       <div class="comparison-container" id="comparison-container">
         <!-- Left Video Panel -->
@@ -106,19 +109,19 @@
       <!-- Action Buttons -->
       <div class="action-buttons">
         <button class="btn-vote btn-vote--super" onclick="vote('super_a')">
-          ⭐ Super Left
+          ⭐ <span class="label-desktop">Super Left</span><span class="label-mobile">Super Top</span>
         </button>
         <button class="btn-vote btn-vote--left" onclick="vote('clip_a')">
-          👈 Left
+          👈 <span class="label-desktop">Left</span><span class="label-mobile">Top</span>
         </button>
         <button class="btn-vote btn-vote--tie" onclick="vote('tie')">
           🤝 Tie
         </button>
         <button class="btn-vote btn-vote--right" onclick="vote('clip_b')">
-          Right 👉
+          <span class="label-desktop">Right</span><span class="label-mobile">Bottom</span> 👉
         </button>
         <button class="btn-vote btn-vote--super" onclick="vote('super_b')">
-          Super Right ⭐
+          <span class="label-desktop">Super Right</span><span class="label-mobile">Super Bottom</span> ⭐
         </button>
       </div>
 
@@ -130,12 +133,12 @@
 
       <!-- Keyboard Shortcuts -->
       <div class="shortcuts">
-        <span class="key">1</span> Left
-        <span class="key">2</span> Right
+        <span class="key">1</span> <span class="label-desktop">Left</span><span class="label-mobile">Top</span>
+        <span class="key">2</span> <span class="label-desktop">Right</span><span class="label-mobile">Bottom</span>
         <span class="key">T</span> Tie
         <span class="key">S</span> Skip
-        <span class="key">Shift+1</span> Super Left
-        <span class="key">Shift+2</span> Super Right
+        <span class="key">Shift+1</span> <span class="label-desktop">Super Left</span><span class="label-mobile">Super Top</span>
+        <span class="key">Shift+2</span> <span class="label-desktop">Super Right</span><span class="label-mobile">Super Bottom</span>
       </div>
     </div>
   </div>
