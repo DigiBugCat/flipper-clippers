@@ -282,7 +282,7 @@ compare.post('/vote', requireAuth, async (c) => {
     return c.json({ success: true, deduplicated: true });
   }
 
-  // Get clips (batched: 1 query instead of 2)
+  // Get clips
   const clipsMap = await getClipsByIds(c.env.DB, [body.clip_a_id, body.clip_b_id]);
   const clipA = clipsMap.get(body.clip_a_id);
   const clipB = clipsMap.get(body.clip_b_id);
@@ -291,7 +291,7 @@ compare.post('/vote', requireAuth, async (c) => {
     return c.json({ error: 'Clip not found' }, 404);
   }
 
-  // Get user ratings for both clips (batched: 1 query instead of 2)
+  // Get user ratings for both clips
   const ratingsMap = await getUserClipRatingsForClips(c.env.DB, userId, [clipA.id, clipB.id]);
   const ratingA = ratingsMap.get(clipA.id) ?? null;
   const ratingB = ratingsMap.get(clipB.id) ?? null;
@@ -338,7 +338,6 @@ compare.post('/vote', requireAuth, async (c) => {
   // Vote processing with error handling
   try {
     // Update user clip ratings (skip doesn't count as a match)
-    // Batched: 1 batch write instead of 2 separate writes
     if (body.result !== 'skip') {
       await batchUpsertUserClipRatings(c.env.DB, userId, [
         {

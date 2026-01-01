@@ -153,19 +153,6 @@ Instance: Single global instance (idFromName('global'))
 
 **Expected monthly cost at high activity (10K votes/day):** $3-7/month
 
-### Query Optimizations Applied
-
-The vote handler has been optimized with batched queries to minimize D1 operations:
-
-| Before | After | Savings |
-|--------|-------|---------|
-| `getClipById()` × 2 (serial) | `getClipsByIds([a, b])` (1 query) | -1 read |
-| `getUserClipRating()` × 2 (serial) | `getUserClipRatingsForClips([a, b])` (1 query) | -1 read |
-| `upsertUserClipRating()` × 2 (serial) | `batchUpsertUserClipRatings([...])` (1 batch) | -1 write |
-| `createComparison()` to D1 | Analytics Engine only | -1 write |
-
-**Total savings per vote: 4 D1 ops (from 12 → 8 worst case)**
-
 ## Features
 
 - **Pairwise Comparison**: Vote on which clip is better in head-to-head matchups
