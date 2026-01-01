@@ -1,6 +1,6 @@
 # Flipper Clippers
 
-A Tinder-style clip ranking app for comparing and ranking Twitch clips. Users vote on pairs of clips to build personal and global leaderboards using an ELO rating system.
+A "This or That" clip ranking app - vote on pairs of Twitch clips to build personal and global leaderboards using an ELO rating system.
 
 **Live at: [flipper-clippers.arross.tv](https://flipper-clippers.arross.tv)**
 
@@ -69,7 +69,7 @@ Optimized for edge computing with multi-layer caching:
 
 ## Features
 
-- **Pairwise Comparison**: Vote on which clip is better, Tinder-style
+- **Pairwise Comparison**: Vote on which clip is better in head-to-head matchups
 - **ELO Rating System**: Clips are ranked using a modified Glicko-style rating system
 - **Personal & Global Leaderboards**: See your own rankings vs. the community consensus
 - **Super Likes**: Mark your absolute favorite clips
