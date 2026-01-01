@@ -20,12 +20,19 @@ vi.mock('../../../src/services/social', () => ({
   getUserTopClips: vi.fn(),
 }));
 
+// Mock the pairing service (getPairingStats is used in profile endpoint)
+vi.mock('../../../src/services/pairing', () => ({
+  getPairingStats: vi.fn(),
+}));
+
 import {
   getTasteCompatibility,
   findSimilarUsers,
   getPublicProfile,
   getUserTopClips,
 } from '../../../src/services/social';
+
+import { getPairingStats } from '../../../src/services/pairing';
 
 // Helper to create a mock environment
 function createMockEnv() {
@@ -68,6 +75,14 @@ describe('Social Handler Integration Tests', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+
+    // Mock getPairingStats to return default values
+    vi.mocked(getPairingStats).mockResolvedValue({
+      totalClips: 100,
+      totalPossiblePairs: 4950,
+      userComparisons: 50,
+      coveragePercent: 1.01,
+    });
   });
 
   afterEach(() => {

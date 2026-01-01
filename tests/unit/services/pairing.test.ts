@@ -39,7 +39,8 @@ function createMockDb(options: {
         return { count: totalClipsCount };
       }
       if (queryType === 'comparisons') {
-        return { count: userComparisonsCount };
+        // Now returns unique_pairs_voted from users table
+        return { unique_pairs_voted: userComparisonsCount };
       }
       return null;
     }),
@@ -54,7 +55,7 @@ function createMockDb(options: {
       if (sql.includes('COUNT(*)') && sql.includes('clips')) {
         return mockStatement('count');
       }
-      if (sql.includes('COUNT(DISTINCT')) {
+      if (sql.includes('unique_pairs_voted')) {
         return mockStatement('comparisons');
       }
       if (sql.includes('SELECT id FROM clips')) {

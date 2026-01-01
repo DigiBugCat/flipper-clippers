@@ -383,18 +383,23 @@ describe('db/queries', () => {
 
   describe('Comparison Operations', () => {
     describe('createComparison', () => {
-      it('creates comparison record', async () => {
+      it('creates comparison record and checks for new pair', async () => {
         const db = createMockD1({});
 
-        await createComparison(db as unknown as D1Database, 1, 1, 2, 1, 'clip_a', 5000);
+        const result = await createComparison(db as unknown as D1Database, 1, 1, 2, 1, 'clip_a', 5000);
 
-        expect(db._statements[0].sql).toContain('INSERT INTO comparisons');
-        const params = db._statements[0].params;
+        // First query checks for existing pair
+        expect(db._statements[0].sql).toContain('SELECT 1 FROM comparisons');
+        // Second query inserts the comparison
+        expect(db._statements[1].sql).toContain('INSERT INTO comparisons');
+        const params = db._statements[1].params;
         expect(params).toContain(1); // user_id
         expect(params).toContain(1); // clip_a_id
         expect(params).toContain(2); // clip_b_id
         expect(params).toContain('clip_a'); // result
         expect(params).toContain(5000); // time_spent_ms
+        // Returns isNewPair status
+        expect(result).toHaveProperty('isNewPair');
       });
 
       it('handles null winner for ties/skips', async () => {
@@ -402,8 +407,19 @@ describe('db/queries', () => {
 
         await createComparison(db as unknown as D1Database, 1, 1, 2, null, 'tie', null);
 
-        expect(db._statements[0].params).toContain(null); // winner_clip_id
-        expect(db._statements[0].params).toContain('tie');
+        // Second query is the INSERT
+        expect(db._statements[1].params).toContain(null); // winner_clip_id
+        expect(db._statements[1].params).toContain('tie');
+      });
+
+      it('increments unique_pairs_voted for new pairs', async () => {
+        const db = createMockD1({});
+
+        const result = await createComparison(db as unknown as D1Database, 1, 1, 2, 1, 'clip_a', 5000);
+
+        // Third query updates user counter for new pair
+        expect(db._statements[2].sql).toContain('UPDATE users SET unique_pairs_voted');
+        expect(result.isNewPair).toBe(true);
       });
     });
 

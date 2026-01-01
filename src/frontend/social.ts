@@ -26,6 +26,9 @@ interface ProfileData {
   displayName: string | null;
   profileImage: string | null;
   totalComparisons: number;
+  coveragePercent: number;
+  uniquePairs: number;
+  totalPossiblePairs: number;
 }
 
 interface CompatibilityData {
@@ -91,7 +94,11 @@ async function loadProfile(userId: number): Promise<void> {
       profileNameEl.textContent = data.profile.displayName || 'Anonymous';
     }
     if (profileStatsEl) {
-      profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast`;
+      const coverageText = data.profile.coveragePercent
+        ? ` • ${data.profile.coveragePercent.toFixed(1)}% coverage`
+        : '';
+      profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast${coverageText}`;
+      profileStatsEl.title = `${data.profile.uniquePairs || 0} unique pairs out of ${data.profile.totalPossiblePairs || 0} possible`;
     }
 
     // Show compatibility if available
@@ -280,15 +287,22 @@ async function init(): Promise<void> {
     if (profileNameEl) {
       profileNameEl.textContent = currentUser.displayName || 'Anonymous';
     }
-    if (profileStatsEl) {
-      profileStatsEl.textContent = `${formatNumber(currentUser.totalComparisons)} votes cast`;
-    }
-
-    // Load own top clips
+    // Load own top clips and get coverage stats
     const response = await fetch(`/api/social/profile/${currentUser.id}`);
     if (response.ok) {
       const data: ProfileResponse = await response.json();
       renderTopClips(data.topClips);
+
+      // Update stats with coverage info
+      if (profileStatsEl) {
+        const coverageText = data.profile.coveragePercent
+          ? ` • ${data.profile.coveragePercent.toFixed(1)}% coverage`
+          : '';
+        profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast${coverageText}`;
+        profileStatsEl.title = `${data.profile.uniquePairs || 0} unique pairs out of ${data.profile.totalPossiblePairs || 0} possible`;
+      }
+    } else if (profileStatsEl) {
+      profileStatsEl.textContent = `${formatNumber(currentUser.totalComparisons)} votes cast`;
     }
 
     // Load similar users

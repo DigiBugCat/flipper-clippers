@@ -151,7 +151,25 @@ export async function createComparison(
   winnerClipId: number | null,
   result: VoteResult,
   timeSpentMs: number | null
-): Promise<void> {
+): Promise<{ isNewPair: boolean }> {
+  // Normalize pair order for consistent checking
+  const [minId, maxId] = clipAId < clipBId ? [clipAId, clipBId] : [clipBId, clipAId];
+
+  // Check if this pair already exists for this user (either order)
+  const existing = await db
+    .prepare(
+      `SELECT 1 FROM comparisons
+       WHERE user_id = ? AND (
+         (clip_a_id = ? AND clip_b_id = ?) OR
+         (clip_a_id = ? AND clip_b_id = ?)
+       ) LIMIT 1`
+    )
+    .bind(userId, minId, maxId, maxId, minId)
+    .first();
+
+  const isNewPair = !existing;
+
+  // Insert the comparison
   await db
     .prepare(
       `INSERT INTO comparisons (user_id, clip_a_id, clip_b_id, winner_clip_id, result, time_spent_ms)
@@ -159,6 +177,16 @@ export async function createComparison(
     )
     .bind(userId, clipAId, clipBId, winnerClipId, result, timeSpentMs)
     .run();
+
+  // Increment unique pairs counter if this is a new pair
+  if (isNewPair) {
+    await db
+      .prepare('UPDATE users SET unique_pairs_voted = unique_pairs_voted + 1 WHERE id = ?')
+      .bind(userId)
+      .run();
+  }
+
+  return { isNewPair };
 }
 
 export async function getUserComparisons(db: D1Database, userId: number, limit = 50): Promise<Comparison[]> {

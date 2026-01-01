@@ -400,7 +400,9 @@
         profileNameEl.textContent = data.profile.displayName || "Anonymous";
       }
       if (profileStatsEl) {
-        profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast`;
+        const coverageText = data.profile.coveragePercent ? ` \u2022 ${data.profile.coveragePercent.toFixed(1)}% coverage` : "";
+        profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast${coverageText}`;
+        profileStatsEl.title = `${data.profile.uniquePairs || 0} unique pairs out of ${data.profile.totalPossiblePairs || 0} possible`;
       }
       if (data.compatibility) {
         const badge = document.getElementById("compatibility-badge");
@@ -525,13 +527,17 @@
       if (profileNameEl) {
         profileNameEl.textContent = currentUser.displayName || "Anonymous";
       }
-      if (profileStatsEl) {
-        profileStatsEl.textContent = `${formatNumber(currentUser.totalComparisons)} votes cast`;
-      }
       const response = await fetch(`/api/social/profile/${currentUser.id}`);
       if (response.ok) {
         const data = await response.json();
         renderTopClips(data.topClips);
+        if (profileStatsEl) {
+          const coverageText = data.profile.coveragePercent ? ` \u2022 ${data.profile.coveragePercent.toFixed(1)}% coverage` : "";
+          profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast${coverageText}`;
+          profileStatsEl.title = `${data.profile.uniquePairs || 0} unique pairs out of ${data.profile.totalPossiblePairs || 0} possible`;
+        }
+      } else if (profileStatsEl) {
+        profileStatsEl.textContent = `${formatNumber(currentUser.totalComparisons)} votes cast`;
       }
       await loadSimilarUsers();
       const ADMIN_USERS = ["digibugcat", "arross"];

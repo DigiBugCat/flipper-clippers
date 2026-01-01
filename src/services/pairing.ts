@@ -156,6 +156,7 @@ export async function getNextPair(
 
 /**
  * Get statistics about pairing coverage
+ * Uses denormalized unique_pairs_voted column for performance (avoids full table scan)
  */
 export async function getPairingStats(db: D1Database, userId: number): Promise<{
   totalClips: number;
@@ -163,26 +164,15 @@ export async function getPairingStats(db: D1Database, userId: number): Promise<{
   userComparisons: number;
   coveragePercent: number;
 }> {
-  // Get total clip count (minimal query)
-  const clipsResult = await db
-    .prepare('SELECT COUNT(*) as count FROM clips WHERE is_active = 1')
-    .first<{ count: number }>();
+  // Parallel queries for clip count and user's unique pairs count
+  const [clipsResult, userResult] = await Promise.all([
+    db.prepare('SELECT COUNT(*) as count FROM clips WHERE is_active = 1').first<{ count: number }>(),
+    db.prepare('SELECT unique_pairs_voted FROM users WHERE id = ?').bind(userId).first<{ unique_pairs_voted: number }>(),
+  ]);
+
   const totalClips = clipsResult?.count ?? 0;
   const totalPossiblePairs = Math.max(0, (totalClips * (totalClips - 1)) / 2);
-
-  // Count user's unique comparisons
-  const result = await db
-    .prepare(
-      `SELECT COUNT(DISTINCT CASE
-         WHEN clip_a_id < clip_b_id THEN clip_a_id || '-' || clip_b_id
-         ELSE clip_b_id || '-' || clip_a_id
-       END) as count
-       FROM comparisons WHERE user_id = ?`
-    )
-    .bind(userId)
-    .first<{ count: number }>();
-
-  const userComparisons = result?.count ?? 0;
+  const userComparisons = userResult?.unique_pairs_voted ?? 0;
   const coveragePercent = totalPossiblePairs > 0 ? (userComparisons / totalPossiblePairs) * 100 : 0;
 
   return {

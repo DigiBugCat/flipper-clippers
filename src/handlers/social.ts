@@ -7,6 +7,7 @@ import {
   getPublicProfile,
   getUserTopClips,
 } from '../services/social';
+import { getPairingStats } from '../services/pairing';
 
 type Variables = AuthVariables;
 
@@ -70,8 +71,11 @@ social.get('/profile/:userId', optionalAuth, async (c) => {
     return c.json({ error: isPublic ? 'User not found' : 'User profile is private' }, 404);
   }
 
-  // Get user's top clips
-  const topClips = await getUserTopClips(c.env.DB, targetUserId, 10);
+  // Get user's top clips and pairing stats in parallel
+  const [topClips, pairingStats] = await Promise.all([
+    getUserTopClips(c.env.DB, targetUserId, 10),
+    getPairingStats(c.env.DB, targetUserId),
+  ]);
 
   // Calculate compatibility if viewer is logged in
   let compatibility = null;
@@ -89,6 +93,9 @@ social.get('/profile/:userId', optionalAuth, async (c) => {
       displayName: user.displayName,
       profileImage: user.profileImage,
       totalComparisons: user.totalComparisons,
+      coveragePercent: pairingStats.coveragePercent,
+      uniquePairs: pairingStats.userComparisons,
+      totalPossiblePairs: pairingStats.totalPossiblePairs,
     },
     topClips: topClips.map(clip => ({
       id: clip.id,

@@ -232,11 +232,16 @@
       localSuperLikes = data.totalSuperLikes || 0;
       const comparisonsEl = document.getElementById("user-comparisons");
       const superLikesEl = document.getElementById("user-super-likes");
+      const coverageEl = document.getElementById("coverage-percent");
       if (comparisonsEl) {
         comparisonsEl.textContent = window.formatNumber(localComparisons);
       }
       if (superLikesEl) {
         superLikesEl.textContent = window.formatNumber(localSuperLikes);
+      }
+      if (coverageEl) {
+        coverageEl.textContent = `${data.coveragePercent?.toFixed(1) || "0"}%`;
+        coverageEl.title = `${data.userComparisons || 0} unique pairs out of ${data.totalPossiblePairs || 0} possible`;
       }
     } catch (error) {
       console.error("Failed to load stats:", error);
