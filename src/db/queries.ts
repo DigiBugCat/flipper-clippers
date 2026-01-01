@@ -780,11 +780,11 @@ export async function getUserLeaderboardSorted(
 
 // Remove clip from user's rankings
 export async function deleteUserClipRating(db: D1Database, userId: number, clipId: number): Promise<void> {
-  // Get the current position of the clip being removed
+  // Get the current position and matches played for the clip being removed
   const rating = await db
-    .prepare('SELECT manual_position FROM user_clip_ratings WHERE user_id = ? AND clip_id = ?')
+    .prepare('SELECT manual_position, matches_played FROM user_clip_ratings WHERE user_id = ? AND clip_id = ?')
     .bind(userId, clipId)
-    .first<{ manual_position: number | null }>();
+    .first<{ manual_position: number | null; matches_played: number }>();
 
   if (!rating) return;
 
@@ -799,6 +799,14 @@ export async function deleteUserClipRating(db: D1Database, userId: number, clipI
     await db
       .prepare('UPDATE user_clip_ratings SET manual_position = manual_position - 1 WHERE user_id = ? AND manual_position > ?')
       .bind(userId, rating.manual_position)
+      .run();
+  }
+
+  // Decrement user's total_comparisons by the matches played for this clip
+  if (rating.matches_played > 0) {
+    await db
+      .prepare('UPDATE users SET total_comparisons = MAX(0, total_comparisons - ?) WHERE id = ?')
+      .bind(rating.matches_played, userId)
       .run();
   }
 }
