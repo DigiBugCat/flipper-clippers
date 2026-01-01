@@ -77,17 +77,17 @@ POST /api/compare/vote
   │     └── KV session:{id} lookup                    │ 0 D1 queries (80% of requests)
   │         └── miss? → D1 session + user lookup      │ 2 D1 queries (20% of requests)
   │
-  ├── Vote Processing (sync) ─────────────────────────┤
-  │     ├── Get both clips from D1                    │ 2 D1 reads
-  │     ├── Get user's ratings for both clips         │ 2 D1 reads
+  ├── Vote Processing (sync, BATCHED) ────────────────┤
+  │     ├── Get both clips (IN query)                 │ 1 D1 read (was 2)
+  │     ├── Get user's ratings (IN query)             │ 1 D1 read (was 2)
   │     ├── Calculate ELO changes (in-memory)         │
-  │     ├── Upsert user_clip_ratings                  │ 2 D1 writes
-  │     └── Record comparison                         │ 1 D1 write
+  │     ├── Batch upsert user_clip_ratings            │ 1 D1 batch (was 2)
+  │     └── Record to Analytics Engine                │ 0 D1 (fire-and-forget)
   │                                                   │
   └── Async (via Queue) ──────────────────────────────┤
         └── Update clip_rating_rollups (batched)      │ 4 D1 ops (deferred)
                                                       │
-TOTAL: ~8-12 D1 ops per vote ─────────────────────────┘
+TOTAL: ~5-8 D1 ops per vote (was 8-12) ───────────────┘
 ```
 
 #### Leaderboard Flow (Stale-While-Revalidate)
@@ -144,14 +144,27 @@ Instance: Single global instance (idFromName('global'))
 
 | Operation | D1 Ops | KV Ops | Approx Cost |
 |-----------|--------|--------|-------------|
-| Vote (cached auth) | 8 | 1 | ~$0.000005 |
+| Vote (cached auth) | 5 | 1 | ~$0.000003 |
 | Leaderboard (KV hit) | 0 | 1 | ~$0.0000005 |
 | Leaderboard (SWR stale) | 10 | 2 | ~$0.000003 |
 | Leaderboard (full miss) | 15+ | 1 | ~$0.00001 |
 | Auth check (KV hit) | 0 | 1 | ~$0.0000005 |
 | Next pair (cookie batch) | 2 | 0 | ~$0.000002 |
 
-**Expected monthly cost at high activity (10K votes/day):** $5-10/month
+**Expected monthly cost at high activity (10K votes/day):** $3-7/month
+
+### Query Optimizations Applied
+
+The vote handler has been optimized with batched queries to minimize D1 operations:
+
+| Before | After | Savings |
+|--------|-------|---------|
+| `getClipById()` × 2 (serial) | `getClipsByIds([a, b])` (1 query) | -1 read |
+| `getUserClipRating()` × 2 (serial) | `getUserClipRatingsForClips([a, b])` (1 query) | -1 read |
+| `upsertUserClipRating()` × 2 (serial) | `batchUpsertUserClipRatings([...])` (1 batch) | -1 write |
+| `createComparison()` to D1 | Analytics Engine only | -1 write |
+
+**Total savings per vote: 4 D1 ops (from 12 → 8 worst case)**
 
 ## Features
 

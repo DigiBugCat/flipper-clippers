@@ -39,12 +39,12 @@ export async function updateUserLogin(db: D1Database, userId: number): Promise<v
 export async function incrementUserComparisons(db: D1Database, userId: number, isSuperLike: boolean): Promise<void> {
   if (isSuperLike) {
     await db
-      .prepare('UPDATE users SET total_comparisons = total_comparisons + 1, total_super_likes = total_super_likes + 1 WHERE id = ?')
+      .prepare("UPDATE users SET total_comparisons = total_comparisons + 1, total_super_likes = total_super_likes + 1, last_login = datetime('now') WHERE id = ?")
       .bind(userId)
       .run();
   } else {
     await db
-      .prepare('UPDATE users SET total_comparisons = total_comparisons + 1 WHERE id = ?')
+      .prepare("UPDATE users SET total_comparisons = total_comparisons + 1, last_login = datetime('now') WHERE id = ?")
       .bind(userId)
       .run();
   }
@@ -88,6 +88,21 @@ export async function getAllClips(db: D1Database): Promise<Clip[]> {
 
 export async function getClipById(db: D1Database, id: number): Promise<Clip | null> {
   return db.prepare('SELECT * FROM clips WHERE id = ?').bind(id).first<Clip>();
+}
+
+/**
+ * Batch fetch multiple clips by IDs (1 query instead of N)
+ */
+export async function getClipsByIds(db: D1Database, ids: number[]): Promise<Map<number, Clip>> {
+  if (ids.length === 0) return new Map();
+
+  const placeholders = ids.map(() => '?').join(',');
+  const result = await db
+    .prepare(`SELECT * FROM clips WHERE id IN (${placeholders})`)
+    .bind(...ids)
+    .all<Clip>();
+
+  return new Map(result.results.map(clip => [clip.id, clip]));
 }
 
 export async function getClipBySlug(db: D1Database, slug: string): Promise<Clip | null> {
@@ -204,6 +219,25 @@ export async function getUserClipRating(db: D1Database, userId: number, clipId: 
     .first<UserClipRating>();
 }
 
+/**
+ * Batch fetch user ratings for multiple clips (1 query instead of N)
+ */
+export async function getUserClipRatingsForClips(
+  db: D1Database,
+  userId: number,
+  clipIds: number[]
+): Promise<Map<number, UserClipRating>> {
+  if (clipIds.length === 0) return new Map();
+
+  const placeholders = clipIds.map(() => '?').join(',');
+  const result = await db
+    .prepare(`SELECT * FROM user_clip_ratings WHERE user_id = ? AND clip_id IN (${placeholders})`)
+    .bind(userId, ...clipIds)
+    .all<UserClipRating>();
+
+  return new Map(result.results.map(rating => [rating.clip_id, rating]));
+}
+
 export async function upsertUserClipRating(
   db: D1Database,
   userId: number,
@@ -232,6 +266,48 @@ export async function upsertUserClipRating(
     )
     .bind(userId, clipId, eloRating, matchesPlayed, wins, losses, ties, superLiked, ratingDeviation)
     .run();
+}
+
+export interface RatingUpsertData {
+  clipId: number;
+  eloRating: number;
+  matchesPlayed: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  superLiked: number;
+  ratingDeviation: number;
+}
+
+/**
+ * Batch upsert multiple user clip ratings (1 batch instead of N writes)
+ */
+export async function batchUpsertUserClipRatings(
+  db: D1Database,
+  userId: number,
+  ratings: RatingUpsertData[]
+): Promise<void> {
+  if (ratings.length === 0) return;
+
+  const statements = ratings.map(r =>
+    db
+      .prepare(
+        `INSERT INTO user_clip_ratings (user_id, clip_id, elo_rating, matches_played, wins, losses, ties, super_liked, rating_deviation)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, clip_id) DO UPDATE SET
+         elo_rating = excluded.elo_rating,
+         matches_played = excluded.matches_played,
+         wins = excluded.wins,
+         losses = excluded.losses,
+         ties = excluded.ties,
+         super_liked = excluded.super_liked,
+         rating_deviation = excluded.rating_deviation,
+         updated_at = datetime('now')`
+      )
+      .bind(userId, r.clipId, r.eloRating, r.matchesPlayed, r.wins, r.losses, r.ties, r.superLiked, r.ratingDeviation)
+  );
+
+  await db.batch(statements);
 }
 
 export async function getUserClipRatings(db: D1Database, userId: number): Promise<UserClipRating[]> {

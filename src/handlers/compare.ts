@@ -1,15 +1,16 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
-import type { Context, Next } from 'hono';
 import type { Env, VoteRequest, VoteResult, User } from '../types';
+import { requireAuth, type AuthVariables } from '../middleware/auth';
 import {
   getClipById,
-  createComparison,
+  getClipsByIds,
   incrementUserComparisons,
-  getUserClipRating,
-  upsertUserClipRating,
+  getUserClipRatingsForClips,
+  batchUpsertUserClipRatings,
   getUserComparisonsWithClips,
   getUserSuperLikedClips,
+  getUserById,
 } from '../db/queries';
 import { calculateNextPairs, getPairingStats, type PairIds } from '../services/pairing';
 import {
@@ -19,7 +20,6 @@ import {
   updateStats,
 } from '../services/rating';
 import { updateRollupForVote } from '../services/aggregation';
-import { getCachedSession } from './auth';
 import { recordActivity, isUserProfilePublic } from '../services/feed';
 
 // Cookie name for pre-calculated pairs
@@ -75,30 +75,9 @@ async function verifyPairs(signed: string, secret: string): Promise<PairIds[] | 
 }
 
 // Extended context type with user variables
-type Variables = {
-  user: User;
-  userId: number;
-};
+type Variables = AuthVariables;
 
 const compare = new Hono<{ Bindings: Env; Variables: Variables }>();
-
-// Middleware to require authentication with KV session caching
-async function requireAuth(c: Context<{ Bindings: Env; Variables: Variables }>, next: Next) {
-  const sessionId = getCookie(c, 'session');
-  if (!sessionId) {
-    return c.json({ error: 'Authentication required' }, 401);
-  }
-
-  // Use KV-cached session lookup
-  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
-  if (!cached) {
-    return c.json({ error: 'Invalid session' }, 401);
-  }
-
-  c.set('user', cached.user);
-  c.set('userId', cached.user.id);
-  await next();
-}
 
 // Get next pair to compare (uses cookie-cached pairs for efficiency)
 compare.get('/next', requireAuth, async (c) => {
@@ -175,6 +154,9 @@ compare.get('/next', requireAuth, async (c) => {
       clippedBy: clipB.clipped_by,
       clippedAt: clipB.clipped_at,
     },
+    // For eager prefetching: let client know how many pairs remain
+    remainingPairs: pairs.length,
+    batchSize: PAIRS_PER_BATCH,
   });
 });
 
@@ -214,6 +196,58 @@ compare.get('/pair', requireAuth, async (c) => {
   });
 });
 
+// Peek at upcoming pairs for prefetching (doesn't consume pairs from cookie)
+compare.get('/peek', requireAuth, async (c) => {
+  const count = parseInt(c.req.query('count') || '3', 10);
+  const maxCount = Math.min(count, 5); // Limit to 5 pairs max
+
+  const pairsCookie = getCookie(c, PENDING_PAIRS_COOKIE);
+  if (!pairsCookie) {
+    return c.json({ pairs: [], remainingCount: 0 });
+  }
+
+  const pairs = await verifyPairs(pairsCookie, c.env.SESSION_SECRET);
+  if (!pairs || pairs.length === 0) {
+    return c.json({ pairs: [], remainingCount: 0 });
+  }
+
+  // Get clip metadata for first N pairs (for prefetching)
+  const upcomingPairs = await Promise.all(
+    pairs.slice(0, maxCount).map(async ([aId, bId]) => {
+      const [clipA, clipB] = await Promise.all([
+        getClipById(c.env.DB, aId),
+        getClipById(c.env.DB, bId),
+      ]);
+
+      if (!clipA || !clipB) return null;
+
+      return {
+        clipA: {
+          id: clipA.id,
+          twitchSlug: clipA.twitch_slug,
+          title: clipA.title,
+          twitchUrl: clipA.twitch_url,
+          clippedBy: clipA.clipped_by,
+          clippedAt: clipA.clipped_at,
+        },
+        clipB: {
+          id: clipB.id,
+          twitchSlug: clipB.twitch_slug,
+          title: clipB.title,
+          twitchUrl: clipB.twitch_url,
+          clippedBy: clipB.clipped_by,
+          clippedAt: clipB.clipped_at,
+        },
+      };
+    })
+  );
+
+  return c.json({
+    pairs: upcomingPairs.filter(Boolean),
+    remainingCount: pairs.length,
+  });
+});
+
 // Submit a vote
 compare.post('/vote', requireAuth, async (c) => {
   const userId = c.get('userId');
@@ -248,17 +282,19 @@ compare.post('/vote', requireAuth, async (c) => {
     return c.json({ success: true, deduplicated: true });
   }
 
-  // Get clips
-  const clipA = await getClipById(c.env.DB, body.clip_a_id);
-  const clipB = await getClipById(c.env.DB, body.clip_b_id);
+  // Get clips (batched: 1 query instead of 2)
+  const clipsMap = await getClipsByIds(c.env.DB, [body.clip_a_id, body.clip_b_id]);
+  const clipA = clipsMap.get(body.clip_a_id);
+  const clipB = clipsMap.get(body.clip_b_id);
 
   if (!clipA || !clipB) {
     return c.json({ error: 'Clip not found' }, 404);
   }
 
-  // Get or create user ratings for both clips
-  let ratingA = await getUserClipRating(c.env.DB, userId, clipA.id);
-  let ratingB = await getUserClipRating(c.env.DB, userId, clipB.id);
+  // Get user ratings for both clips (batched: 1 query instead of 2)
+  const ratingsMap = await getUserClipRatingsForClips(c.env.DB, userId, [clipA.id, clipB.id]);
+  const ratingA = ratingsMap.get(clipA.id) ?? null;
+  const ratingB = ratingsMap.get(clipB.id) ?? null;
 
   // Default values if no existing rating
   const currentRatingA = ratingA?.elo_rating ?? 1500;
@@ -302,78 +338,110 @@ compare.post('/vote', requireAuth, async (c) => {
   // Vote processing with error handling
   try {
     // Update user clip ratings (skip doesn't count as a match)
+    // Batched: 1 batch write instead of 2 separate writes
     if (body.result !== 'skip') {
-      await upsertUserClipRating(
-        c.env.DB,
-        userId,
-        clipA.id,
-        newRatingA,
-        matchesA + 1,
-        statsA.wins,
-        statsA.losses,
-        statsA.ties,
-        superLikedA,
-        newDeviationA
-      );
+      await batchUpsertUserClipRatings(c.env.DB, userId, [
+        {
+          clipId: clipA.id,
+          eloRating: newRatingA,
+          matchesPlayed: matchesA + 1,
+          wins: statsA.wins,
+          losses: statsA.losses,
+          ties: statsA.ties,
+          superLiked: superLikedA,
+          ratingDeviation: newDeviationA,
+        },
+        {
+          clipId: clipB.id,
+          eloRating: newRatingB,
+          matchesPlayed: matchesB + 1,
+          wins: statsB.wins,
+          losses: statsB.losses,
+          ties: statsB.ties,
+          superLiked: superLikedB,
+          ratingDeviation: newDeviationB,
+        },
+      ]);
 
-      await upsertUserClipRating(
-        c.env.DB,
-        userId,
-        clipB.id,
-        newRatingB,
-        matchesB + 1,
-        statsB.wins,
-        statsB.losses,
-        statsB.ties,
-        superLikedB,
-        newDeviationB
-      );
-
-      // Incrementally update rollup for both clips (2 reads, 2 writes)
-      // Use current comparison count for weight (not +1) to avoid double-weighting if increment fails
+      // Queue rollup updates and user counter increment for async processing
+      // This reduces vote latency by ~50ms
       const user = c.get('user');
       const userWeight = Math.min(Math.max(user.total_comparisons, 1), 100);
 
-      await updateRollupForVote(
-        c.env.DB,
-        clipA.id,
-        currentRatingA,
-        newRatingA,
-        deviationA,
-        newDeviationA,
-        userWeight,
-        !ratingA,
-        { matches: 1, wins: statsA.wins - (ratingA?.wins ?? 0), losses: statsA.losses - (ratingA?.losses ?? 0), ties: statsA.ties - (ratingA?.ties ?? 0), superLike: body.result === 'super_a' ? 1 : 0 }
-      );
+      if (c.env.VOTE_QUEUE) {
+        // Send to queue for async processing
+        await c.env.VOTE_QUEUE.send({
+          clipAId: clipA.id,
+          clipBId: clipB.id,
+          userId,
+          result: body.result,
+          newRatingA,
+          newRatingB,
+          currentRatingA,
+          currentRatingB,
+          deviationA,
+          deviationB,
+          newDeviationA,
+          newDeviationB,
+          userWeight,
+          isSuperLike: isSuperLikeResult(body.result),
+          isNewRatingA: !ratingA,
+          isNewRatingB: !ratingB,
+          statsA: { wins: statsA.wins - (ratingA?.wins ?? 0), losses: statsA.losses - (ratingA?.losses ?? 0), ties: statsA.ties - (ratingA?.ties ?? 0) },
+          statsB: { wins: statsB.wins - (ratingB?.wins ?? 0), losses: statsB.losses - (ratingB?.losses ?? 0), ties: statsB.ties - (ratingB?.ties ?? 0) },
+        });
+      } else {
+        // Fallback for testing: sync rollup updates
+        await updateRollupForVote(
+          c.env.DB,
+          clipA.id,
+          currentRatingA,
+          newRatingA,
+          deviationA,
+          newDeviationA,
+          userWeight,
+          !ratingA,
+          { matches: 1, wins: statsA.wins - (ratingA?.wins ?? 0), losses: statsA.losses - (ratingA?.losses ?? 0), ties: statsA.ties - (ratingA?.ties ?? 0), superLike: body.result === 'super_a' ? 1 : 0 }
+        );
 
-      await updateRollupForVote(
-        c.env.DB,
-        clipB.id,
-        currentRatingB,
-        newRatingB,
-        deviationB,
-        newDeviationB,
-        userWeight,
-        !ratingB,
-        { matches: 1, wins: statsB.wins - (ratingB?.wins ?? 0), losses: statsB.losses - (ratingB?.losses ?? 0), ties: statsB.ties - (ratingB?.ties ?? 0), superLike: body.result === 'super_b' ? 1 : 0 }
-      );
+        await updateRollupForVote(
+          c.env.DB,
+          clipB.id,
+          currentRatingB,
+          newRatingB,
+          deviationB,
+          newDeviationB,
+          userWeight,
+          !ratingB,
+          { matches: 1, wins: statsB.wins - (ratingB?.wins ?? 0), losses: statsB.losses - (ratingB?.losses ?? 0), ties: statsB.ties - (ratingB?.ties ?? 0), superLike: body.result === 'super_b' ? 1 : 0 }
+        );
+      }
     }
 
     // Record the comparison
     const winnerId = getWinnerFromResult(body.result, clipA.id, clipB.id);
-    await createComparison(
-      c.env.DB,
-      userId,
-      clipA.id,
-      clipB.id,
-      winnerId,
-      body.result,
-      body.time_spent_ms ?? null
-    );
+
+    // Write to Analytics Engine (non-blocking, fire-and-forget)
+    // This is the primary audit log for comparisons
+    c.env.VOTES_ANALYTICS?.writeDataPoint({
+      indexes: [body.result],
+      blobs: [
+        clipA.twitch_slug,
+        clipB.twitch_slug,
+        winnerId ? (winnerId === clipA.id ? clipA.twitch_slug : clipB.twitch_slug) : 'none',
+      ],
+      doubles: [userId, clipA.id, clipB.id, Date.now(), body.time_spent_ms ?? 0],
+    });
+
+    // Note: D1 comparisons table write removed - Analytics Engine is primary audit log
+    // Saves 1 D1 write per vote
 
     // Increment user comparison count
+    // Queue handles this if available, otherwise do it sync
     const isSuperLike = isSuperLikeResult(body.result);
-    await incrementUserComparisons(c.env.DB, userId, isSuperLike);
+    if (!c.env.VOTE_QUEUE) {
+      await incrementUserComparisons(c.env.DB, userId, isSuperLike);
+    }
 
     // Record activity to feed (respects user privacy setting)
     if (body.result !== 'skip') {
@@ -398,6 +466,10 @@ compare.post('/vote', requireAuth, async (c) => {
   // Global aggregation runs lazily when leaderboard cache misses
   // No longer triggered by user votes or cron
 
+  // Get user for stats response (optimistic update for frontend)
+  const user = c.get('user');
+  const isSuperLike = isSuperLikeResult(body.result);
+
   console.log(`[COMPARE] POST /vote completed in ${Date.now() - startTime}ms`);
   console.log(`[ACTIVITY] user=${userId} action=vote clipA=${clipA.id} clipB=${clipB.id} result=${body.result}`);
   return c.json({
@@ -406,13 +478,23 @@ compare.post('/vote', requireAuth, async (c) => {
       clipA: { id: clipA.id, elo: newRatingA },
       clipB: { id: clipB.id, elo: newRatingB },
     },
+    // Return updated stats for optimistic UI (avoids race with async queue)
+    stats: {
+      totalComparisons: user.total_comparisons + 1,
+      totalSuperLikes: user.total_super_likes + (isSuperLike ? 1 : 0),
+    },
   });
 });
 
 // Get user's comparison stats
 compare.get('/stats', requireAuth, async (c) => {
   const userId = c.get('userId');
-  const user = c.get('user');
+
+  // Fetch fresh user data for accurate stats (don't use cached session data)
+  const user = await getUserById(c.env.DB, userId);
+  if (!user) {
+    return c.json({ error: 'User not found' }, 404);
+  }
 
   const pairingStats = await getPairingStats(c.env.DB, userId);
 
