@@ -12,8 +12,15 @@ import { aggregateGlobalRankings } from './services/aggregation';
 const app = new Hono<{ Bindings: Env }>();
 
 // CORS middleware for API routes
+// Note: Same-origin requests don't need CORS, but we support localhost for dev
 app.use('/api/*', cors({
-  origin: '*',
+  origin: (origin) => {
+    // Allow same-origin (no origin header) and localhost for dev
+    if (!origin) return origin;
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) return origin;
+    if (origin.includes('arross.tv')) return origin;
+    return null;
+  },
   credentials: true,
 }));
 
