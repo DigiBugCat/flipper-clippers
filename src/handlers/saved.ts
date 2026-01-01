@@ -1,7 +1,5 @@
 import { Hono } from 'hono';
-import { getCookie } from 'hono/cookie';
-import type { Context, Next } from 'hono';
-import type { Env, User } from '../types';
+import type { Env } from '../types';
 import {
   getClipById,
   getSavedClips,
@@ -11,34 +9,13 @@ import {
   unsaveClip,
   reorderSavedClip,
 } from '../db/queries';
-import { getCachedSession } from './auth';
+import { requireAuth, type AuthVariables } from '../middleware/auth';
 import { recordActivity } from '../services/feed';
 
 // Extended context type with user variables
-type Variables = {
-  user: User;
-  userId: number;
-};
+type Variables = AuthVariables;
 
 const saved = new Hono<{ Bindings: Env; Variables: Variables }>();
-
-// Middleware to require authentication with KV session caching
-async function requireAuth(c: Context<{ Bindings: Env; Variables: Variables }>, next: Next) {
-  const sessionId = getCookie(c, 'session');
-  if (!sessionId) {
-    return c.json({ error: 'Authentication required' }, 401);
-  }
-
-  // Use KV-cached session lookup
-  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
-  if (!cached) {
-    return c.json({ error: 'Invalid session' }, 401);
-  }
-
-  c.set('user', cached.user);
-  c.set('userId', cached.user.id);
-  await next();
-}
 
 // Get all saved clips for the user
 saved.get('/', requireAuth, async (c) => {

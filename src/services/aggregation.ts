@@ -3,6 +3,10 @@ import type { Clip } from '../types';
 // Rollup staleness threshold (5 minutes)
 const ROLLUP_STALE_MINUTES = 5;
 
+// Recency weighting configuration
+const RATING_HALF_LIFE_DAYS = 14; // Rating influence halves every 14 days
+const MIN_RECENCY_FACTOR = 0.1; // Minimum 10% weight for old ratings
+
 interface AggregatedClipRow {
   clip_id: number;
   weighted_elo: number | null;
@@ -103,9 +107,9 @@ async function recalculateAggregates(db: D1Database, startTime: number): Promise
   const clipIds = new Set(clipsResult.results.map((r) => r.id));
   console.log(`[AGGREGATION] Query 1: ${clipIds.size} clips, rows_read=${clipsResult.meta?.rows_read}`);
 
-  // Query 2: Get all user clip ratings
+  // Query 2: Get all user clip ratings (including updated_at for recency weighting)
   const ratingsResult = await db
-    .prepare('SELECT user_id, clip_id, elo_rating, rating_deviation, matches_played, wins, losses, ties, super_liked FROM user_clip_ratings')
+    .prepare('SELECT user_id, clip_id, elo_rating, rating_deviation, matches_played, wins, losses, ties, super_liked, updated_at FROM user_clip_ratings')
     .all<{
       user_id: number;
       clip_id: number;
@@ -116,6 +120,7 @@ async function recalculateAggregates(db: D1Database, startTime: number): Promise
       losses: number;
       ties: number;
       super_liked: number;
+      updated_at: string;
     }>();
   console.log(`[AGGREGATION] Query 2: ${ratingsResult.results.length} ratings, rows_read=${ratingsResult.meta?.rows_read}`);
 
@@ -138,11 +143,22 @@ async function recalculateAggregates(db: D1Database, startTime: number): Promise
     totalSuperLikes: number;
   }>();
 
+  const now = Date.now();
+
   for (const rating of ratingsResult.results) {
     if (!clipIds.has(rating.clip_id)) continue;
 
     const userWeight = usersMap.get(rating.user_id) ?? 0;
     if (userWeight === 0) continue;
+
+    // Calculate recency factor based on when rating was last updated
+    const updatedAt = rating.updated_at ? new Date(rating.updated_at).getTime() : now;
+    const daysSinceUpdate = (now - updatedAt) / (1000 * 60 * 60 * 24);
+    const recencyFactor = Math.max(
+      MIN_RECENCY_FACTOR,
+      Math.pow(0.5, daysSinceUpdate / RATING_HALF_LIFE_DAYS)
+    );
+    const effectiveWeight = userWeight * recencyFactor;
 
     let agg = clipAggregates.get(rating.clip_id);
     if (!agg) {
@@ -159,9 +175,9 @@ async function recalculateAggregates(db: D1Database, startTime: number): Promise
       clipAggregates.set(rating.clip_id, agg);
     }
 
-    agg.weightedEloSum += rating.elo_rating * userWeight;
-    agg.weightedDeviationSum += rating.rating_deviation * userWeight;
-    agg.weightSum += userWeight;
+    agg.weightedEloSum += rating.elo_rating * effectiveWeight;
+    agg.weightedDeviationSum += rating.rating_deviation * effectiveWeight;
+    agg.weightSum += effectiveWeight;
     agg.totalMatches += rating.matches_played;
     agg.totalWins += rating.wins;
     agg.totalLosses += rating.losses;
@@ -339,6 +355,10 @@ export async function compareUserRankings(
 /**
  * Incrementally update rollup for a single clip after a vote
  * Called from vote handler to keep rollup fresh without full recalculation
+ *
+ * Note: Recency weighting is applied during full recalculation (recalculateAggregates).
+ * Incremental updates use full weight since votes are always "now" (recency = 1.0).
+ * This creates minor drift over time, corrected by periodic full recalculation.
  */
 export async function updateRollupForVote(
   db: D1Database,

@@ -4,7 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Compare - Flipper Clippers</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="/css/styles.css">
+  <!-- DNS prefetch for Twitch CDN -->
+  <link rel="dns-prefetch" href="//clips.twitch.tv">
+  <link rel="dns-prefetch" href="//static-cdn.jtvnw.net">
+  <link rel="preconnect" href="https://clips.twitch.tv" crossorigin>
 </head>
 <body>
   <!-- Navigation -->
@@ -14,7 +19,9 @@
       <div class="nav-links">
         <a href="/compare" class="nav-link active">Compare</a>
         <a href="/leaderboard" class="nav-link">Leaderboard</a>
+        <a href="/feed" class="nav-link">Feed</a>
         <a href="/saved" class="nav-link">Saved</a>
+        <a href="https://clipdle.arross.tv/" class="nav-link">Clipdle</a>
       </div>
       <div class="nav-user" id="nav-user">
         <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
@@ -58,7 +65,7 @@
           <div class="video-info">
             <div class="video-title-row">
               <div class="video-title" id="title-a">Loading...</div>
-              <button class="btn-save" id="save-a" onclick="toggleSave('a')" title="Save clip">☆</button>
+              <button class="btn-save" id="save-a" title="Save clip">☆</button>
             </div>
             <div class="clipped-by" id="clipped-by-a">Clipped by ...</div>
             <div class="clipped-at" id="clipped-at-a"></div>
@@ -85,7 +92,7 @@
           <div class="video-info">
             <div class="video-title-row">
               <div class="video-title" id="title-b">Loading...</div>
-              <button class="btn-save" id="save-b" onclick="toggleSave('b')" title="Save clip">☆</button>
+              <button class="btn-save" id="save-b" title="Save clip">☆</button>
             </div>
             <div class="clipped-by" id="clipped-by-b">Clipped by ...</div>
             <div class="clipped-at" id="clipped-at-b"></div>
@@ -108,25 +115,25 @@
 
       <!-- Action Buttons -->
       <div class="action-buttons">
-        <button class="btn-vote btn-vote--super" onclick="vote('super_a')">
+        <button class="btn-vote btn-vote--super" id="vote-super-a">
           ⭐ <span class="label-desktop">Super Left</span><span class="label-mobile">Super Top</span>
         </button>
-        <button class="btn-vote btn-vote--left" onclick="vote('clip_a')">
+        <button class="btn-vote btn-vote--left" id="vote-clip-a">
           👈 <span class="label-desktop">Left</span><span class="label-mobile">Top</span>
         </button>
-        <button class="btn-vote btn-vote--tie" onclick="vote('tie')">
+        <button class="btn-vote btn-vote--tie" id="vote-tie">
           🤝 Tie
         </button>
-        <button class="btn-vote btn-vote--right" onclick="vote('clip_b')">
+        <button class="btn-vote btn-vote--right" id="vote-clip-b">
           <span class="label-desktop">Right</span><span class="label-mobile">Bottom</span> 👉
         </button>
-        <button class="btn-vote btn-vote--super" onclick="vote('super_b')">
+        <button class="btn-vote btn-vote--super" id="vote-super-b">
           <span class="label-desktop">Super Right</span><span class="label-mobile">Super Bottom</span> ⭐
         </button>
       </div>
 
       <div class="action-buttons">
-        <button class="btn-vote btn-vote--skip" onclick="vote('skip')">
+        <button class="btn-vote btn-vote--skip" id="vote-skip">
           Skip
         </button>
       </div>
@@ -147,7 +154,7 @@
   <div class="toast" id="toast"></div>
 
   <!-- Scripts -->
-  <script src="/js/app.js"></script>
-  <script src="/js/compare.js"></script>
+  <script src="/js/app.js" defer></script>
+  <script src="/js/compare.js" defer></script>
 </body>
 </html>

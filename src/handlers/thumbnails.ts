@@ -1,7 +1,34 @@
 import { Hono } from 'hono';
+import { getCookie } from 'hono/cookie';
 import type { Env } from '../types';
+import { getCachedSession } from './auth';
 
 const thumbnails = new Hono<{ Bindings: Env }>();
+
+// Admin users for protected operations
+const ADMIN_USERS = ['digibugcat', 'arross'];
+
+// Helper to check admin access
+async function requireAdmin(c: { env: Env; req: { header: (name: string) => string | undefined }; json: (data: unknown, status?: number) => Response }): Promise<{ authorized: true } | { authorized: false; response: Response }> {
+  const cookies = c.req.header('cookie') || '';
+  const sessionMatch = cookies.match(/session=([^;]+)/);
+  const sessionId = sessionMatch?.[1];
+
+  if (!sessionId) {
+    return { authorized: false, response: c.json({ error: 'Authentication required' }, 401) };
+  }
+
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
+    return { authorized: false, response: c.json({ error: 'Invalid session' }, 401) };
+  }
+
+  if (!ADMIN_USERS.includes(cached.user.twitch_username)) {
+    return { authorized: false, response: c.json({ error: 'Admin access required' }, 403) };
+  }
+
+  return { authorized: true };
+}
 
 // Cache TTL: 30 days in seconds
 const CACHE_TTL = 30 * 24 * 60 * 60;
@@ -199,10 +226,16 @@ thumbnails.get('/:slug', async (c) => {
 });
 
 /**
- * Seed thumbnails for all clips in database
+ * Seed thumbnails for all clips in database (admin only)
  * POST /api/thumbnails/seed
  */
 thumbnails.post('/seed', async (c) => {
+  // Require admin access
+  const authResult = await requireAdmin(c);
+  if (!authResult.authorized) {
+    return authResult.response;
+  }
+
   // Get all clips from database
   const clips = await c.env.DB
     .prepare('SELECT twitch_slug FROM clips WHERE is_active = 1')
@@ -286,9 +319,15 @@ thumbnails.post('/seed', async (c) => {
 });
 
 /**
- * Purge a specific thumbnail from cache
+ * Purge a specific thumbnail from cache (admin only)
  */
 thumbnails.delete('/:slug', async (c) => {
+  // Require admin access
+  const authResult = await requireAdmin(c);
+  if (!authResult.authorized) {
+    return authResult.response;
+  }
+
   const slug = c.req.param('slug');
   const cacheKey = `thumb:${slug}`;
 
@@ -298,9 +337,15 @@ thumbnails.delete('/:slug', async (c) => {
 });
 
 /**
- * Purge all thumbnails (for debugging)
+ * Purge all thumbnails (admin only)
  */
 thumbnails.delete('/purge/all', async (c) => {
+  // Require admin access
+  const authResult = await requireAdmin(c);
+  if (!authResult.authorized) {
+    return authResult.response;
+  }
+
   // List all keys and delete them
   let cursor: string | undefined;
   let deleted = 0;

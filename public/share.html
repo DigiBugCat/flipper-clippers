@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shared Rankings - Flipper Clippers</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/css/styles.css">
+  <meta property="og:title" content="My Clip Rankings - Flipper Clippers">
+  <meta property="og:description" content="Check out my top Twitch clip rankings!">
+  <meta property="og:type" content="website">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="navbar-inner">
+      <a href="/" class="nav-brand">Flipper Clippers</a>
+      <div class="nav-links">
+        <a href="/compare" class="nav-link">Compare</a>
+        <a href="/leaderboard" class="nav-link">Leaderboard</a>
+        <a href="/feed" class="nav-link">Feed</a>
+        <a href="/saved" class="nav-link">Saved</a>
+        <a href="https://clipdle.arross.tv/" class="nav-link">Clipdle</a>
+      </div>
+      <div class="nav-user" id="nav-user">
+        <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="container">
+    <!-- Loading State -->
+    <div class="loading" id="loading-state">
+      <div class="spinner"></div>
+      <div class="loading-text">Loading shared content...</div>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-state" class="empty-state hidden">
+      <h2>Link Not Found</h2>
+      <p id="error-message">This share link is invalid or has expired.</p>
+      <a href="/" class="btn btn-primary" style="margin-top: var(--space-lg);">Go Home</a>
+    </div>
+
+    <!-- Shared Content -->
+    <div id="shared-content" class="hidden">
+      <!-- Share Header -->
+      <div class="profile-header">
+        <img id="share-image" src="" alt="" class="profile-avatar-large">
+        <div class="profile-info">
+          <h1 id="share-name">User's Rankings</h1>
+          <p id="share-stats" class="profile-stats"></p>
+        </div>
+      </div>
+
+      <!-- Top Clips -->
+      <div id="top-clips-section">
+        <h2 id="clips-title">Top Clips</h2>
+        <div id="top-clips-list" class="top-clips-list">
+          <div class="empty-state">No clips found.</div>
+        </div>
+      </div>
+
+      <!-- Call to Action -->
+      <div class="share-cta">
+        <p>Want to create your own rankings?</p>
+        <a href="/compare" class="btn btn-primary">Start Comparing</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Scripts -->
+  <script src="/js/app.js"></script>
+  <script>
+    /**
+     * Get token from URL path /share/:token
+     */
+    function getTokenFromUrl() {
+      const path = window.location.pathname;
+      const match = path.match(/\/share\/([a-z0-9]+)/i);
+      return match ? match[1] : null;
+    }
+
+    /**
+     * Load shared content
+     */
+    async function loadSharedContent() {
+      const loadingEl = document.getElementById('loading-state');
+      const errorEl = document.getElementById('error-state');
+      const contentEl = document.getElementById('shared-content');
+
+      const token = getTokenFromUrl();
+
+      if (!token) {
+        document.getElementById('error-message').textContent = 'No share token provided.';
+        loadingEl.classList.add('hidden');
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/share/${token}`);
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Share link not found');
+        }
+
+        const data = await response.json();
+
+        // Update header
+        document.getElementById('share-image').src = data.user.profileImage || '/img/default-avatar.png';
+        document.getElementById('share-name').textContent = `${data.user.displayName || 'Anonymous'}'s Rankings`;
+        document.getElementById('share-stats').textContent = `${formatNumber(data.user.totalComparisons)} votes cast`;
+
+        // Update title based on type
+        if (data.type === 'top5') {
+          document.getElementById('clips-title').textContent = 'Top 5 Clips';
+        }
+
+        // Render clips
+        const container = document.getElementById('top-clips-list');
+        if (data.topClips.length === 0) {
+          container.innerHTML = '<div class="empty-state">No clips rated yet.</div>';
+        } else {
+          container.innerHTML = data.topClips.map((clip, index) => `
+            <div class="top-clip-item">
+              <span class="top-clip-rank">#${index + 1}</span>
+              <img class="top-clip-thumbnail" src="${getTwitchThumbnail(clip.twitchSlug)}" alt="" onerror="handleThumbnailError(this)">
+              <div class="top-clip-info">
+                <a href="https://clips.twitch.tv/${encodeURIComponent(clip.twitchSlug)}" target="_blank" rel="noopener" class="top-clip-title">
+                  ${escapeHtml(clip.title || 'Untitled Clip')}
+                </a>
+                <span class="top-clip-elo">${clip.userElo} ELO</span>
+              </div>
+            </div>
+          `).join('');
+        }
+
+        // Update OG meta
+        document.title = `${data.user.displayName || 'User'}'s Rankings - Flipper Clippers`;
+
+        // Show content
+        loadingEl.classList.add('hidden');
+        contentEl.classList.remove('hidden');
+
+      } catch (error) {
+        console.error('Failed to load shared content:', error);
+        document.getElementById('error-message').textContent = error.message;
+        loadingEl.classList.add('hidden');
+        errorEl.classList.remove('hidden');
+      }
+    }
+
+    // Initialize
+    checkAuth();
+    loadSharedContent();
+  </script>
+</body>
+</html>

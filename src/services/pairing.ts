@@ -1,178 +1,157 @@
-import type { Clip, UserClipRating } from '../types';
-import { getRecentPairings, recordPairing, getUserClipRatings, getAllClips } from '../db/queries';
+import type { Clip } from '../types';
+import { getClipById } from '../db/queries';
 
-interface ClipWithRating {
-  clip: Clip;
-  userRating: UserClipRating | null;
+// Simple pair type for cookie storage
+export type PairIds = [number, number];
+
+// Pairing configuration constants
+const COOLDOWN_HOURS = 24; // Deprioritize pairs where both clips were rated within this window
+
+/**
+ * Calculate next N pairs for a user using minimal D1 queries
+ * Pairs are stored in cookie and popped one at a time
+ */
+export async function calculateNextPairs(
+  db: D1Database,
+  userId: number,
+  count: number = 10
+): Promise<PairIds[]> {
+  console.log(`[PAIRING] calculateNextPairs user=${userId} count=${count}`);
+  const startTime = Date.now();
+
+  // Query 1: Get all active clip IDs (small query, just IDs)
+  const clipsResult = await db
+    .prepare('SELECT id FROM clips WHERE is_active = 1')
+    .all<{ id: number }>();
+  const allClipIds = clipsResult.results.map((r) => r.id);
+  console.log(`[PAIRING] Query 1: ${allClipIds.length} clips, rows_read=${clipsResult.meta?.rows_read}`);
+
+  if (allClipIds.length < 2) {
+    return [];
+  }
+
+  // Query 2: Get user's rated clips with updated_at (for recency-based deprioritization)
+  const ratedResult = await db
+    .prepare('SELECT clip_id, updated_at FROM user_clip_ratings WHERE user_id = ?')
+    .bind(userId)
+    .all<{ clip_id: number; updated_at: string }>();
+
+  const ratedClipIds = new Set(ratedResult.results.map((r) => r.clip_id));
+  const clipLastRated = new Map<number, number>(); // clip_id -> timestamp
+  const now = Date.now();
+  const cooldownMs = COOLDOWN_HOURS * 60 * 60 * 1000;
+
+  for (const r of ratedResult.results) {
+    clipLastRated.set(r.clip_id, new Date(r.updated_at).getTime());
+  }
+  console.log(`[PAIRING] Query 2: ${ratedClipIds.size} rated, rows_read=${ratedResult.meta?.rows_read}`);
+
+  // Calculate pairs in Worker memory
+  const pairs: PairIds[] = [];
+  const usedInBatch = new Set<string>();
+
+  // Prioritize unrated clips
+  const unratedClipIds = allClipIds.filter((id) => !ratedClipIds.has(id));
+  const ratedClipIdsList = allClipIds.filter((id) => ratedClipIds.has(id));
+
+  // Strategy: pair unrated with rated, then unrated with unrated, then rated with rated
+  const candidates: PairIds[] = [];
+
+  // Unrated vs rated (highest priority)
+  for (const unrated of unratedClipIds) {
+    for (const rated of ratedClipIdsList) {
+      candidates.push([unrated, rated]);
+    }
+  }
+
+  // Unrated vs unrated
+  for (let i = 0; i < unratedClipIds.length; i++) {
+    for (let j = i + 1; j < unratedClipIds.length; j++) {
+      candidates.push([unratedClipIds[i], unratedClipIds[j]]);
+    }
+  }
+
+  // Rated vs rated (lowest priority, for when user has seen most clips)
+  for (let i = 0; i < ratedClipIdsList.length; i++) {
+    for (let j = i + 1; j < ratedClipIdsList.length; j++) {
+      candidates.push([ratedClipIdsList[i], ratedClipIdsList[j]]);
+    }
+  }
+
+  // Shuffle candidates for variety within priority groups
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
+
+  // Separate candidates into fresh pairs and recently-rated pairs
+  // A pair is "recently rated" if BOTH clips were rated within the cooldown period
+  const freshCandidates: PairIds[] = [];
+  const recentCandidates: PairIds[] = [];
+
+  for (const [a, b] of candidates) {
+    const lastRatedA = clipLastRated.get(a) ?? 0;
+    const lastRatedB = clipLastRated.get(b) ?? 0;
+
+    // If BOTH clips were rated recently, this pair was likely just compared
+    const bothRecent = (now - lastRatedA < cooldownMs) && (now - lastRatedB < cooldownMs);
+
+    if (bothRecent) {
+      recentCandidates.push([a, b]);
+    } else {
+      freshCandidates.push([a, b]);
+    }
+  }
+
+  // Select pairs: prefer fresh, fall back to recently-rated
+  const selectFrom = (pool: PairIds[]) => {
+    for (const [a, b] of pool) {
+      if (pairs.length >= count) break;
+
+      const pairKey = [Math.min(a, b), Math.max(a, b)].join('-');
+      if (usedInBatch.has(pairKey)) continue;
+
+      // Randomize order 50% of the time
+      const pair: PairIds = Math.random() > 0.5 ? [a, b] : [b, a];
+      pairs.push(pair);
+      usedInBatch.add(pairKey);
+    }
+  };
+
+  selectFrom(freshCandidates);
+  if (pairs.length < count) {
+    selectFrom(recentCandidates);
+  }
+
+  console.log(`[PAIRING] Generated ${pairs.length} pairs in ${Date.now() - startTime}ms`);
+  return pairs;
 }
 
 /**
- * Get the next pair of clips for a user to compare
- *
- * Strategy:
- * 1. Prioritize clips with high rating deviation (uncertain)
- * 2. Avoid recently shown pairs
- * 3. Match clips with similar ratings for informative comparisons
- * 4. Ensure variety (don't repeat same clips too often)
+ * Get the next pair from cookie or calculate new batch
+ * Returns clip objects for the response
  */
 export async function getNextPair(
   db: D1Database,
   userId: number
 ): Promise<{ clipA: Clip; clipB: Clip } | null> {
-  // Get all active clips
-  const clips = await getAllClips(db);
-  if (clips.length < 2) {
+  // This function now just calculates one pair for backwards compatibility
+  // The compare handler should use calculateNextPairs + cookie instead
+  const pairs = await calculateNextPairs(db, userId, 1);
+
+  if (pairs.length === 0) {
     return null;
   }
 
-  // Get user's ratings for personalized pairing
-  const userRatings = await getUserClipRatings(db, userId);
-  const ratingMap = new Map<number, UserClipRating>();
-  for (const rating of userRatings) {
-    ratingMap.set(rating.clip_id, rating);
+  const [clipAId, clipBId] = pairs[0];
+  const clipA = await getClipById(db, clipAId);
+  const clipB = await getClipById(db, clipBId);
+
+  if (!clipA || !clipB) {
+    return null;
   }
 
-  // Get recently shown pairs to avoid (last 1 hour)
-  const recentPairs = await getRecentPairings(db, userId, 1);
-
-  // Build clip list with ratings
-  const clipsWithRatings: ClipWithRating[] = clips.map((clip) => ({
-    clip,
-    userRating: ratingMap.get(clip.id) || null,
-  }));
-
-  // Score all possible pairs and collect candidates
-  const candidates: { clipA: Clip; clipB: Clip; score: number }[] = [];
-
-  for (let i = 0; i < clipsWithRatings.length; i++) {
-    for (let j = i + 1; j < clipsWithRatings.length; j++) {
-      const a = clipsWithRatings[i];
-      const b = clipsWithRatings[j];
-
-      // Create pair key for lookup
-      const pairKey = [Math.min(a.clip.id, b.clip.id), Math.max(a.clip.id, b.clip.id)].join('-');
-
-      // Skip if recently shown
-      if (recentPairs.has(pairKey)) {
-        continue;
-      }
-
-      // Calculate pair score
-      const score = calculatePairScore(a, b);
-      candidates.push({ clipA: a.clip, clipB: b.clip, score });
-    }
-  }
-
-  // Sort by score descending and pick randomly from top candidates
-  candidates.sort((a, b) => b.score - a.score);
-
-  let bestPair: { clipA: Clip; clipB: Clip } | null = null;
-  if (candidates.length > 0) {
-    // Pick randomly from top 20 candidates for variety
-    const topN = Math.min(20, candidates.length);
-    const randomIndex = Math.floor(Math.random() * topN);
-    bestPair = candidates[randomIndex];
-  }
-
-  // If all pairs have been shown recently, pick the least recently shown
-  if (!bestPair) {
-    bestPair = getLeastShownPair(clipsWithRatings);
-  }
-
-  if (bestPair) {
-    // Randomize order 50% of the time
-    if (Math.random() > 0.5) {
-      bestPair = { clipA: bestPair.clipB, clipB: bestPair.clipA };
-    }
-
-    // Record this pairing
-    await recordPairing(db, userId, bestPair.clipA.id, bestPair.clipB.id);
-  }
-
-  return bestPair;
-}
-
-/**
- * Calculate a score for a potential pair
- * Higher score = more valuable comparison
- */
-function calculatePairScore(a: ClipWithRating, b: ClipWithRating): number {
-  let score = 0;
-
-  // Get ratings (use defaults if no user rating exists)
-  const ratingA = a.userRating?.elo_rating ?? a.clip.global_elo;
-  const ratingB = b.userRating?.elo_rating ?? b.clip.global_elo;
-  const deviationA = a.userRating?.rating_deviation ?? a.clip.rating_deviation;
-  const deviationB = b.userRating?.rating_deviation ?? b.clip.rating_deviation;
-  const matchesA = a.userRating?.matches_played ?? 0;
-  const matchesB = b.userRating?.matches_played ?? 0;
-
-  // Check if user has seen these clips
-  const aUnseen = a.userRating === null;
-  const bUnseen = b.userRating === null;
-
-  // 1. HIGHEST PRIORITY: Unseen clips (user hasn't compared yet)
-  // Heavily prioritize showing clips the user hasn't seen to ensure full coverage
-  if (aUnseen && bUnseen) {
-    score += 1000; // Both unseen = highest priority - must see all clips!
-  } else if (aUnseen || bUnseen) {
-    score += 800; // One unseen = very high priority
-  }
-
-  // 2. HIGH PRIORITY: Globally unranked clips (few total comparisons)
-  // Prioritize clips that need more global data
-  const globalMatchesA = a.clip.global_matches ?? 0;
-  const globalMatchesB = b.clip.global_matches ?? 0;
-  const minGlobalMatches = Math.min(globalMatchesA, globalMatchesB);
-  if (minGlobalMatches < 10) {
-    score += (10 - minGlobalMatches) * 15; // Max 150 points
-  }
-
-  // 3. Uncertainty bonus (prioritize clips needing more data)
-  // Higher deviation = more uncertain = more valuable to compare
-  const avgDeviation = (deviationA + deviationB) / 2;
-  score += avgDeviation * 0.5; // Max ~175 points
-
-  // 4. Rating similarity bonus (more informative when close)
-  // Comparing clips with similar ratings gives more information
-  const ratingDiff = Math.abs(ratingA - ratingB);
-  if (ratingDiff < 200) {
-    score += 100 - ratingDiff / 2; // Max 100 points
-  }
-
-  // 5. Low user match count bonus (prioritize under-compared clips for this user)
-  const minMatches = Math.min(matchesA, matchesB);
-  if (minMatches < 5) {
-    score += (5 - minMatches) * 20; // Max 100 points
-  }
-
-  // 6. Small random factor for variety
-  score += Math.random() * 20;
-
-  return score;
-}
-
-/**
- * Fallback: get the pair with fewest comparisons
- */
-function getLeastShownPair(clips: ClipWithRating[]): { clipA: Clip; clipB: Clip } | null {
-  if (clips.length < 2) return null;
-
-  // Sort by least matches played
-  const sorted = [...clips].sort((a, b) => {
-    const matchesA = a.userRating?.matches_played ?? 0;
-    const matchesB = b.userRating?.matches_played ?? 0;
-    return matchesA - matchesB;
-  });
-
-  // Pick two clips with fewest matches, add some randomness
-  const pool = sorted.slice(0, Math.min(10, sorted.length));
-  const shuffled = pool.sort(() => Math.random() - 0.5);
-
-  return {
-    clipA: shuffled[0].clip,
-    clipB: shuffled[1].clip,
-  };
+  return { clipA, clipB };
 }
 
 /**
@@ -184,9 +163,12 @@ export async function getPairingStats(db: D1Database, userId: number): Promise<{
   userComparisons: number;
   coveragePercent: number;
 }> {
-  const clips = await getAllClips(db);
-  const totalClips = clips.length;
-  const totalPossiblePairs = (totalClips * (totalClips - 1)) / 2;
+  // Get total clip count (minimal query)
+  const clipsResult = await db
+    .prepare('SELECT COUNT(*) as count FROM clips WHERE is_active = 1')
+    .first<{ count: number }>();
+  const totalClips = clipsResult?.count ?? 0;
+  const totalPossiblePairs = Math.max(0, (totalClips * (totalClips - 1)) / 2);
 
   // Count user's unique comparisons
   const result = await db

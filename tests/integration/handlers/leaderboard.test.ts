@@ -248,7 +248,7 @@ describe('leaderboard handler integration tests', () => {
       expect(data.leaderboard[2].elo).toBe(1200);
     });
 
-    it('includes rank, elo, matches, wins, losses, ties, superLikes, winRate, confidence', async () => {
+    it('includes rank, elo, matches, wins, losses, ties, globalSuperLikes, winRate, confidence', async () => {
       const clips = [
         createTestClip({
           id: 1,
@@ -277,7 +277,7 @@ describe('leaderboard handler integration tests', () => {
       expect(entry).toHaveProperty('wins', 30);
       expect(entry).toHaveProperty('losses', 15);
       expect(entry).toHaveProperty('ties', 5);
-      expect(entry).toHaveProperty('superLikes', 10);
+      expect(entry).toHaveProperty('globalSuperLikes', 10);
       expect(entry).toHaveProperty('winRate', 60); // 30/50 * 100
       expect(entry).toHaveProperty('confidence');
     });

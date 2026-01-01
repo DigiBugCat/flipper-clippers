@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profile - Flipper Clippers</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/css/styles.css">
+  <!-- DNS prefetch for Twitch CDN -->
+  <link rel="dns-prefetch" href="//clips.twitch.tv">
+  <link rel="dns-prefetch" href="//static-cdn.jtvnw.net">
+  <link rel="preconnect" href="https://clips.twitch.tv" crossorigin>
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="navbar-inner">
+      <a href="/" class="nav-brand">Flipper Clippers</a>
+      <div class="nav-links">
+        <a href="/compare" class="nav-link">Compare</a>
+        <a href="/leaderboard" class="nav-link">Leaderboard</a>
+        <a href="/feed" class="nav-link">Feed</a>
+        <a href="/saved" class="nav-link">Saved</a>
+        <a href="https://clipdle.arross.tv/" class="nav-link">Clipdle</a>
+      </div>
+      <div class="nav-user" id="nav-user">
+        <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="container">
+    <!-- Loading State -->
+    <div class="loading" id="loading-state">
+      <div class="spinner"></div>
+      <div class="loading-text">Loading profile...</div>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-state" class="empty-state hidden">
+      <h2>Profile Not Found</h2>
+      <p id="error-message">This profile is private or doesn't exist.</p>
+    </div>
+
+    <!-- Profile Content -->
+    <div id="profile-content" class="hidden">
+      <!-- Profile Header -->
+      <div class="profile-header">
+        <img id="profile-image" src="" alt="" class="profile-avatar-large">
+        <div class="profile-info">
+          <h1 id="profile-name">User</h1>
+          <p id="profile-stats" class="profile-stats"></p>
+        </div>
+        <div id="compatibility-badge" class="compatibility-badge hidden">
+          <span class="compat-score"></span>
+          <span class="compat-label">compatibility</span>
+        </div>
+      </div>
+
+      <!-- Similar Users (only on own profile) -->
+      <div id="similar-users-section" class="hidden">
+        <h2>Similar Tastes</h2>
+        <div id="similar-users-list" class="similar-users-list">
+          <div class="empty-state">Loading...</div>
+        </div>
+      </div>
+
+      <!-- Top Clips -->
+      <div id="top-clips-section">
+        <h2>Top Rated Clips</h2>
+        <div id="top-clips-list" class="top-clips-list">
+          <div class="empty-state">No clips rated yet.</div>
+        </div>
+      </div>
+
+      <!-- Account Settings (only on own profile) -->
+      <div id="account-settings-section" class="hidden">
+        <h2>Account Settings</h2>
+        <div class="account-settings">
+          <button id="reset-votes-btn" class="btn btn-secondary">Reset All Votes</button>
+          <button id="delete-account-btn" class="btn btn-danger">Delete Account</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Scripts -->
+  <script src="/js/app.js" defer></script>
+  <script src="/js/social.js" defer></script>
+</body>
+</html>

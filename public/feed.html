@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Activity Feed - Flipper Clippers</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/css/styles.css">
+  <!-- DNS prefetch for Twitch CDN -->
+  <link rel="dns-prefetch" href="//clips.twitch.tv">
+  <link rel="dns-prefetch" href="//static-cdn.jtvnw.net">
+  <link rel="preconnect" href="https://clips.twitch.tv" crossorigin>
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="navbar-inner">
+      <a href="/" class="nav-brand">Flipper Clippers</a>
+      <div class="nav-links">
+        <a href="/compare" class="nav-link">Compare</a>
+        <a href="/leaderboard" class="nav-link">Leaderboard</a>
+        <a href="/feed" class="nav-link active">Feed</a>
+        <a href="/saved" class="nav-link">Saved</a>
+        <a href="https://clipdle.arross.tv/" class="nav-link">Clipdle</a>
+      </div>
+      <div class="nav-user" id="nav-user">
+        <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="container">
+    <h1 style="margin-bottom: var(--space-xl);">Activity Feed</h1>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" id="tab-global">
+        Global Activity
+      </button>
+      <button class="tab-btn" id="tab-trending">
+        Trending
+      </button>
+      <button class="tab-btn" id="tab-my">
+        My Activity
+      </button>
+    </div>
+
+    <!-- Loading State -->
+    <div class="loading hidden" id="loading-state">
+      <div class="spinner"></div>
+      <div class="loading-text">Loading activity...</div>
+    </div>
+
+    <!-- Global Activity Section -->
+    <div id="global-section">
+      <div id="global-activity" class="activity-list">
+        <div class="empty-state">Loading...</div>
+      </div>
+      <button class="btn btn-ghost load-more hidden" id="load-more-global">
+        Load More
+      </button>
+    </div>
+
+    <!-- Trending Section -->
+    <div id="trending-section" class="hidden">
+      <div class="trending-controls">
+        <label for="period-select">Time period:</label>
+        <select id="period-select">
+          <option value="24h">Last 24 hours</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+        </select>
+      </div>
+      <div id="trending-list" class="trending-list">
+        <div class="empty-state">Loading...</div>
+      </div>
+    </div>
+
+    <!-- My Activity Section -->
+    <div id="my-section" class="hidden">
+      <div id="my-activity-auth" class="empty-state hidden">
+        <a href="/api/auth/login">Sign in</a> to view your activity history.
+      </div>
+      <div id="my-activity" class="activity-list">
+        <div class="empty-state">Loading...</div>
+      </div>
+      <button class="btn btn-ghost load-more hidden" id="load-more-my">
+        Load More
+      </button>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Scripts -->
+  <script src="/js/app.js" defer></script>
+  <script src="/js/feed.js" defer></script>
+</body>
+</html>

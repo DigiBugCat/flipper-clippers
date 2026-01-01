@@ -415,6 +415,30 @@ compare.post('/vote', requireAuth, async (c) => {
           { matches: 1, wins: statsB.wins - (ratingB?.wins ?? 0), losses: statsB.losses - (ratingB?.losses ?? 0), ties: statsB.ties - (ratingB?.ties ?? 0), superLike: body.result === 'super_b' ? 1 : 0 }
         );
       }
+    } else if (c.env.VOTE_QUEUE) {
+      // Skip votes still need to update user counters via queue
+      const user = c.get('user');
+      const userWeight = Math.min(Math.max(user.total_comparisons, 1), 100);
+      await c.env.VOTE_QUEUE.send({
+        clipAId: clipA.id,
+        clipBId: clipB.id,
+        userId,
+        result: 'skip',
+        newRatingA: currentRatingA,
+        newRatingB: currentRatingB,
+        currentRatingA,
+        currentRatingB,
+        deviationA,
+        deviationB,
+        newDeviationA: deviationA,
+        newDeviationB: deviationB,
+        userWeight,
+        isSuperLike: false,
+        isNewRatingA: false,
+        isNewRatingB: false,
+        statsA: { wins: 0, losses: 0, ties: 0 },
+        statsB: { wins: 0, losses: 0, ties: 0 },
+      });
     }
 
     // Record the comparison
@@ -465,8 +489,8 @@ compare.post('/vote', requireAuth, async (c) => {
   // Global aggregation runs lazily when leaderboard cache misses
   // No longer triggered by user votes or cron
 
-  // Get user for stats response (optimistic update for frontend)
-  const user = c.get('user');
+  // Fetch fresh user stats from DB (not cached session) for accurate optimistic update
+  const freshUser = await getUserById(c.env.DB, userId);
   const isSuperLike = isSuperLikeResult(body.result);
 
   console.log(`[COMPARE] POST /vote completed in ${Date.now() - startTime}ms`);
@@ -478,9 +502,10 @@ compare.post('/vote', requireAuth, async (c) => {
       clipB: { id: clipB.id, elo: newRatingB },
     },
     // Return updated stats for optimistic UI (avoids race with async queue)
+    // Use fresh DB data + 1 since queue hasn't processed yet
     stats: {
-      totalComparisons: user.total_comparisons + 1,
-      totalSuperLikes: user.total_super_likes + (isSuperLike ? 1 : 0),
+      totalComparisons: (freshUser?.total_comparisons ?? 0) + 1,
+      totalSuperLikes: (freshUser?.total_super_likes ?? 0) + (isSuperLike ? 1 : 0),
     },
   });
 });

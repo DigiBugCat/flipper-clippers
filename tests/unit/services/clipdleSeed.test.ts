@@ -127,7 +127,8 @@ describe('clipdleSeed service', () => {
     });
 
     it('should handle new year correctly', () => {
-      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      // Use mid-day time to avoid timezone boundary issues
+      vi.setSystemTime(new Date('2026-01-01T12:00:00Z'));
       expect(getTodaySeed()).toBe('20260101');
     });
 

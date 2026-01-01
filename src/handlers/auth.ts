@@ -8,6 +8,7 @@ import {
   getSession,
   deleteSession,
   getUserById,
+  updateUserPrivacy,
 } from '../db/queries';
 
 const auth = new Hono<{ Bindings: Env }>();
@@ -277,14 +278,19 @@ auth.get('/me', async (c) => {
     return c.json({ user: null }, 200);
   }
 
-  // Use KV-cached session lookup
+  // Use KV-cached session lookup for auth
   const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
   if (!cached) {
     deleteCookie(c, 'session', { path: '/' });
     return c.json({ user: null }, 200);
   }
 
-  const { user } = cached;
+  // Fetch fresh user stats (not from cache) so comparison count is always current
+  const user = await getUserById(c.env.DB, cached.session.user_id);
+  if (!user) {
+    deleteCookie(c, 'session', { path: '/' });
+    return c.json({ user: null }, 200);
+  }
 
   return c.json({
     user: {
@@ -294,8 +300,132 @@ auth.get('/me', async (c) => {
       profileImage: user.twitch_profile_image,
       totalComparisons: user.total_comparisons,
       totalSuperLikes: user.total_super_likes,
+      isProfilePublic: user.is_profile_public === 1,
     },
   });
+});
+
+// Get privacy settings
+auth.get('/privacy', async (c) => {
+  const sessionId = getCookie(c, 'session');
+
+  if (!sessionId) {
+    return c.json({ error: 'Not authenticated' }, 401);
+  }
+
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
+    deleteCookie(c, 'session', { path: '/' });
+    return c.json({ error: 'Invalid session' }, 401);
+  }
+
+  return c.json({
+    isProfilePublic: cached.user.is_profile_public === 1,
+  });
+});
+
+// Update privacy settings
+auth.put('/privacy', async (c) => {
+  const sessionId = getCookie(c, 'session');
+
+  if (!sessionId) {
+    return c.json({ error: 'Not authenticated' }, 401);
+  }
+
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
+    deleteCookie(c, 'session', { path: '/' });
+    return c.json({ error: 'Invalid session' }, 401);
+  }
+
+  const body = await c.req.json<{ isProfilePublic: boolean }>();
+  if (typeof body.isProfilePublic !== 'boolean') {
+    return c.json({ error: 'isProfilePublic must be a boolean' }, 400);
+  }
+
+  await updateUserPrivacy(c.env.DB, cached.user.id, body.isProfilePublic);
+
+  // Invalidate session cache so the new privacy setting is reflected
+  await invalidateCachedSession(c.env.SESSION_CACHE, sessionId);
+
+  console.log(`[ACTIVITY] user=${cached.user.id} action=update_privacy is_public=${body.isProfilePublic}`);
+
+  return c.json({
+    success: true,
+    isProfilePublic: body.isProfilePublic,
+  });
+});
+
+// Secret admin login page (for digibugcat production debugging)
+auth.get('/dev', async (c) => {
+  const error = c.req.query('error');
+  return c.html(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Dev Login</title>
+      <style>
+        body { font-family: system-ui; background: #1a1a2e; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .container { background: #16213e; padding: 2rem; border-radius: 8px; width: 300px; }
+        h1 { margin: 0 0 1rem; font-size: 1.25rem; }
+        input { width: 100%; padding: 0.75rem; margin: 0.5rem 0; border: 1px solid #333; border-radius: 4px; background: #0f0f23; color: #fff; box-sizing: border-box; }
+        button { width: 100%; padding: 0.75rem; background: #9147ff; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #772ce8; }
+        .error { color: #ff6b6b; font-size: 0.875rem; margin-top: 0.5rem; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>🔐 Dev Login</h1>
+        <form method="POST" action="/api/auth/dev">
+          <input type="password" name="key" placeholder="Enter secret key" required autofocus />
+          <button type="submit">Login</button>
+          ${error ? '<p class="error">Invalid key</p>' : ''}
+        </form>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+auth.post('/dev', async (c) => {
+  const formData = await c.req.formData();
+  const key = formData.get('key');
+
+  // Validate secret key
+  if (!key || key !== c.env.ADMIN_LOGIN_KEY) {
+    return c.redirect('/api/auth/dev?error=1');
+  }
+
+  // Find digibugcat user
+  const user = await c.env.DB
+    .prepare('SELECT * FROM users WHERE twitch_username = ?')
+    .bind('digibugcat')
+    .first<User>();
+
+  if (!user) {
+    return c.html('<h1>Admin user not found</h1><p>digibugcat must login via Twitch first.</p>', 404);
+  }
+
+  // Create session
+  const sessionId = generateSessionId();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  await c.env.DB
+    .prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)')
+    .bind(sessionId, user.id, expiresAt)
+    .run();
+
+  setCookie(c, 'session', sessionId, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+    maxAge: 7 * 24 * 60 * 60,
+    path: '/',
+  });
+
+  console.log(`[ACTIVITY] user=${user.id} action=admin_login`);
+  return c.redirect('/compare');
 });
 
 // Logout
@@ -313,6 +443,89 @@ auth.post('/logout', async (c) => {
     await deleteSession(c.env.DB, sessionId);
     deleteCookie(c, 'session', { path: '/' });
   }
+
+  return c.json({ success: true });
+});
+
+// Reset all votes for the current user
+auth.post('/reset-votes', async (c) => {
+  const sessionId = getCookie(c, 'session');
+
+  if (!sessionId) {
+    return c.json({ error: 'Not authenticated' }, 401);
+  }
+
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
+    deleteCookie(c, 'session', { path: '/' });
+    return c.json({ error: 'Invalid session' }, 401);
+  }
+
+  const userId = cached.user.id;
+
+  // Delete all vote-related data for this user
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM comparisons WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM user_clip_ratings WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM pairing_history WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM taste_compatibility_cache WHERE user_a_id = ? OR user_b_id = ?').bind(userId, userId),
+    c.env.DB.prepare(`
+      UPDATE users SET
+        total_comparisons = 0,
+        total_super_likes = 0,
+        total_skips = 0,
+        total_ties = 0,
+        total_clips_seen = 0,
+        current_streak = 0,
+        longest_streak = 0,
+        last_vote_date = NULL
+      WHERE id = ?
+    `).bind(userId),
+  ]);
+
+  // Invalidate session cache to reflect new stats
+  await invalidateCachedSession(c.env.SESSION_CACHE, sessionId);
+
+  console.log(`[ACTIVITY] user=${userId} action=reset_votes`);
+
+  return c.json({ success: true });
+});
+
+// Delete account completely
+auth.post('/delete-account', async (c) => {
+  const sessionId = getCookie(c, 'session');
+
+  if (!sessionId) {
+    return c.json({ error: 'Not authenticated' }, 401);
+  }
+
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
+    deleteCookie(c, 'session', { path: '/' });
+    return c.json({ error: 'Invalid session' }, 401);
+  }
+
+  const userId = cached.user.id;
+
+  // Delete all user data
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM comparisons WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM user_clip_ratings WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM pairing_history WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM saved_clips WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM clip_comments WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM activity_feed WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM taste_compatibility_cache WHERE user_a_id = ? OR user_b_id = ?').bind(userId, userId),
+    c.env.DB.prepare('DELETE FROM share_tokens WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId),
+  ]);
+
+  // Clear session
+  await invalidateCachedSession(c.env.SESSION_CACHE, sessionId);
+  deleteCookie(c, 'session', { path: '/' });
+
+  console.log(`[ACTIVITY] user=${userId} action=delete_account`);
 
   return c.json({ success: true });
 });

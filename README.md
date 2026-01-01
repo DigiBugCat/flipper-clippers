@@ -31,21 +31,32 @@ flowchart TD
         KV["KV Store<br/>sessions 60s, thumbs 30d"]
     end
 
-    subgraph Data["③ Data Layer"]
+    subgraph Async["③ Async Processing"]
+        Queue["Vote Queue<br/>batch 100, 5s timeout"]
+        DO["Durable Object<br/>aggregation coordinator"]
+        Analytics["Analytics Engine<br/>vote audit log"]
+    end
+
+    subgraph Data["④ Data Layer"]
         Rollups["D1 Rollups<br/>stale after 5min"]
         Tables["D1 Tables<br/>source of truth"]
     end
 
-    Twitch["④ External<br/>Twitch API"]
+    Twitch["⑤ External<br/>Twitch API"]
 
     Browser --> BCache
     BCache -->|miss| CDN
     CDN -->|miss| Worker
     Cookie -.->|with request| Worker
     Worker <--> KV
+    Worker -->|async| Queue
+    Worker -->|async| Analytics
+    Queue --> Rollups
+    Worker -->|coordinate| DO
+    DO --> Rollups
     KV -->|miss| Rollups
     Rollups -->|stale| Tables
-    Worker <--> Twitch
+    Worker <-->|clip sync| Twitch
 ```
 
 ### Serverless-First Design
@@ -62,10 +73,13 @@ Optimized for edge computing with multi-layer caching:
 | **D1** | Rollup tables | 5 min staleness | Pre-aggregated global rankings |
 
 **Key optimizations:**
+- **Async Vote Processing**: Votes enqueued for batch processing, reducing response latency to ~50ms
 - **Lazy Aggregation**: Global rankings recalculate only on cache miss, not on a schedule
 - **Incremental Rollups**: Each vote updates rollup sums immediately (2 queries vs full recalc)
 - **Cookie-Based Batching**: Pre-calculates 10 comparison pairs per batch, HMAC-signed to prevent tampering
 - **Session Caching**: KV lookup before D1, reducing auth overhead from 2 queries to 0 on cache hit
+- **Durable Object Coalescing**: Prevents duplicate aggregation when multiple requests hit simultaneously
+- **Smart Placement**: Worker runs closer to D1 database for reduced latency
 
 ### Cache Flow Details
 
@@ -82,12 +96,16 @@ POST /api/compare/vote
   │     ├── Get user's ratings (IN query)             │ 1 D1 read (was 2)
   │     ├── Calculate ELO changes (in-memory)         │
   │     ├── Batch upsert user_clip_ratings            │ 1 D1 batch (was 2)
-  │     └── Record to Analytics Engine                │ 0 D1 (fire-and-forget)
+  │     ├── Record to Analytics Engine                │ 0 D1 (fire-and-forget)
+  │     └── Enqueue vote for async processing         │ 0 D1 (non-blocking)
   │                                                   │
-  └── Async (via Queue) ──────────────────────────────┤
-        └── Update clip_rating_rollups (batched)      │ 4 D1 ops (deferred)
+  └── Response returns in ~50ms ──────────────────────┤
                                                       │
-TOTAL: ~5-8 D1 ops per vote (was 8-12) ───────────────┘
+  Queue Consumer (async, batched up to 100 votes):    │
+        ├── Update clip_rating_rollups                │ 4 D1 ops per clip
+        └── Batch update user stats & streaks         │ 1 D1 batch per user
+                                                      │
+TOTAL: ~3-5 D1 ops sync + deferred rollups ───────────┘
 ```
 
 #### Leaderboard Flow (Stale-While-Revalidate)
@@ -142,19 +160,20 @@ Instance: Single global instance (idFromName('global'))
 
 ### Cost Estimates (Paid Plan)
 
-| Operation | D1 Ops | KV Ops | Approx Cost |
-|-----------|--------|--------|-------------|
-| Vote (cached auth) | 5 | 1 | ~$0.000003 |
-| Leaderboard (KV hit) | 0 | 1 | ~$0.0000005 |
-| Leaderboard (SWR stale) | 10 | 2 | ~$0.000003 |
-| Leaderboard (full miss) | 15+ | 1 | ~$0.00001 |
-| Auth check (KV hit) | 0 | 1 | ~$0.0000005 |
-| Next pair (cookie batch) | 2 | 0 | ~$0.000002 |
+| Operation | D1 Ops | KV Ops | Queue | Approx Cost |
+|-----------|--------|--------|-------|-------------|
+| Vote (cached auth) | 3-5 | 1 | 1 | ~$0.000002 |
+| Leaderboard (KV hit) | 0 | 1 | 0 | ~$0.0000005 |
+| Leaderboard (SWR stale) | 10 | 2 | 0 | ~$0.000003 |
+| Leaderboard (full miss) | 15+ | 1 | 0 | ~$0.00001 |
+| Auth check (KV hit) | 0 | 1 | 0 | ~$0.0000005 |
+| Next pair (cookie batch) | 2 | 0 | 0 | ~$0.000002 |
 
 **Expected monthly cost at high activity (10K votes/day):** $3-7/month
 
 ## Features
 
+### Core
 - **Pairwise Comparison**: Vote on which clip is better in head-to-head matchups
 - **ELO Rating System**: Clips are ranked using a modified Glicko-style rating system
 - **Personal & Global Leaderboards**: See your own rankings vs. the community consensus
@@ -163,13 +182,34 @@ Instance: Single global instance (idFromName('global'))
 - **Twitch OAuth**: Sign in with your Twitch account
 - **Smart Pairing**: Algorithm prioritizes showing unseen clips for full coverage
 
+### Clipdle
+A daily "guess the higher ELO" game (like Wordle for clips). Each day presents 8 rounds where you pick which clip has the higher community rating. Share your score and compete with friends.
+
+**Live at: [clipdle.arross.tv](https://clipdle.arross.tv)**
+
+### Social
+- **Taste Compatibility**: See how your clip preferences match with other users
+- **Similar Users**: Find people with similar taste in clips
+- **Public Profiles**: Share your top-rated clips and comparison stats
+- **Shareable Links**: Generate links to share your profile or top 5 clips
+
+### Activity Feed
+- **Global Feed**: See public activity (votes, super likes, comments) from all users
+- **Trending Clips**: Discover clips gaining traction over 24h, 7d, or 30d periods
+- **Comments & Reactions**: Add emoji reactions and text comments to clips
+
 ## Tech Stack
 
 - **Runtime**: Cloudflare Workers
 - **Framework**: [Hono](https://hono.dev/) - Ultrafast web framework
 - **Database**: Cloudflare D1 (SQLite)
+- **Caching**: KV for sessions & thumbnails, CDN for API responses
+- **Queues**: Cloudflare Queues for async vote processing
+- **Durable Objects**: Aggregation coordination to prevent duplicate work
+- **Analytics**: Analytics Engine for vote audit logs
 - **Auth**: Twitch OAuth 2.0
-- **Frontend**: Vanilla JS with Twitch embed player
+- **Frontend**: Vanilla TypeScript with Twitch embed player
+- **Clip Sync**: Automated daily sync from Twitch API via cron
 
 ## Development
 
@@ -211,13 +251,7 @@ Instance: Single global instance (idFromName('global'))
    npm run db:migrate:local
    ```
 
-7. Import clips (optional):
-   ```bash
-   node scripts/generate-import-sql.js path/to/clips.csv
-   wrangler d1 execute clip-ranker-db --local --file=scripts/import-clips.sql
-   ```
-
-8. Start development server:
+7. Start development server:
    ```bash
    npm run dev
    ```
@@ -240,22 +274,50 @@ Instance: Single global instance (idFromName('global'))
    npm run deploy
    ```
 
-## CSV Format for Clip Import
-
-```csv
-Title,Uploader,Date,URL
-"Clip Title","ClipperName",20241231,https://www.twitch.tv/channel/clip/ClipSlug
-```
-
 ## API Endpoints
 
+### Compare
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/compare/next` | Get next pair to compare |
 | `POST /api/compare/vote` | Submit a vote |
+
+### Leaderboard
+| Endpoint | Description |
+|----------|-------------|
 | `GET /api/leaderboard` | Global leaderboard |
 | `GET /api/leaderboard/me` | Personal leaderboard |
-| `POST /api/aggregate` | Manual aggregation trigger (runs lazily on leaderboard miss) |
+
+### Feed & Social
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/feed/global` | Global activity feed |
+| `GET /api/feed/trending` | Trending clips by period |
+| `GET /api/social/profile/:userId` | Public user profile |
+| `GET /api/social/compatibility/:userId` | Taste compatibility score |
+| `GET /api/social/similar` | Find users with similar taste |
+
+### Comments
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/comments/:clipId` | Get clip comments |
+| `POST /api/comments/:clipId` | Add comment or reaction |
+| `GET /api/comments/reactions/:clipId` | Get reaction counts |
+
+### Share
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/share/create` | Generate shareable link |
+| `GET /api/share/:token` | View shared content |
+| `GET /api/share/my-links` | List your share links |
+
+### Clipdle
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/clipdle/today` | Get today's seed |
+| `GET /api/clipdle/game` | Start game with seed |
+| `GET /api/clipdle/round` | Get round clips |
+| `GET /api/clipdle/reveal` | Reveal ELOs after guess |
 
 ## License
 

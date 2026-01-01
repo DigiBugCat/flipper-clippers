@@ -7,8 +7,15 @@ CREATE TABLE IF NOT EXISTS users (
     twitch_profile_image TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     last_login TEXT DEFAULT (datetime('now')),
+    last_active TEXT DEFAULT (datetime('now')),
     total_comparisons INTEGER DEFAULT 0,
     total_super_likes INTEGER DEFAULT 0,
+    total_skips INTEGER DEFAULT 0,
+    total_ties INTEGER DEFAULT 0,
+    total_clips_seen INTEGER DEFAULT 0,
+    current_streak INTEGER DEFAULT 0,
+    longest_streak INTEGER DEFAULT 0,
+    last_vote_date TEXT,
     is_profile_public INTEGER DEFAULT 1
 );
 
@@ -75,6 +82,23 @@ CREATE TABLE IF NOT EXISTS user_clip_ratings (
 
 CREATE INDEX IF NOT EXISTS idx_user_clip_ratings_user ON user_clip_ratings(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_clip_ratings_clip ON user_clip_ratings(clip_id);
+
+-- Clip rating rollups (aggregated stats for global rankings)
+CREATE TABLE IF NOT EXISTS clip_rating_rollups (
+    clip_id INTEGER PRIMARY KEY,
+    weighted_elo REAL,
+    weighted_deviation REAL,
+    weighted_elo_sum REAL,
+    weighted_deviation_sum REAL,
+    weight_sum REAL,
+    total_matches INTEGER DEFAULT 0,
+    total_wins INTEGER DEFAULT 0,
+    total_losses INTEGER DEFAULT 0,
+    total_ties INTEGER DEFAULT 0,
+    total_super_likes INTEGER DEFAULT 0,
+    last_updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (clip_id) REFERENCES clips(id)
+);
 
 -- Pairing history to avoid showing same pairs repeatedly
 CREATE TABLE IF NOT EXISTS pairing_history (

@@ -4,15 +4,34 @@
   "description": "Tinder-like pairwise comparison system for ranking Twitch clips",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "build:frontend": "node scripts/build-frontend.js",
+    "build:frontend:watch": "node scripts/build-frontend.js --watch",
+    "dev": "npm run build:frontend && wrangler dev",
+    "dev:clipdle": "npm run build:frontend && wrangler dev --config wrangler.clipdle.toml",
+    "check:migrations": "node scripts/check-migrations.js",
+    "deploy": "npm run test && npm run check:migrations && npm run build:frontend && wrangler deploy",
+    "deploy:clipdle": "npm run test && npm run check:migrations && npm run build:frontend && wrangler deploy --config wrangler.clipdle.toml",
+    "deploy:all": "npm run test && npm run check:migrations && npm run build:frontend && wrangler deploy && wrangler deploy --config wrangler.clipdle.toml",
+    "deploy:skip-tests": "npm run build:frontend && wrangler deploy",
     "db:migrate": "wrangler d1 execute clip-ranker-db --file=src/db/schema.sql",
     "db:migrate:local": "wrangler d1 execute clip-ranker-db --local --file=src/db/schema.sql"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.11.1",
     "@cloudflare/workers-types": "^4.20241218.0",
+    "@types/ws": "^8.18.1",
+    "@vitest/coverage-v8": "^3.2.4",
+    "esbuild": "^0.27.2",
+    "miniflare": "^4.20251217.0",
     "typescript": "^5.7.2",
-    "wrangler": "^3.99.0"
+    "vitest": "^3.2.4",
+    "wrangler": "^3.99.0",
+    "ws": "^8.18.3"
   },
   "dependencies": {
     "hono": "^4.6.14"

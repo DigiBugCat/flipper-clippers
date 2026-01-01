@@ -3,10 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Clipdle - Which Clip is Ranked Higher?</title>
-    <link rel="stylesheet" href="/clipdle/styles.css">
+    <title>Clipdle - Which Arross Clip is Ranked Higher?</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="https://flipper-clippers.arross.tv" class="nav-brand">Flipper Clippers</a>
+            <div class="nav-links">
+                <a href="/" class="nav-link active">Clipdle</a>
+            </div>
+        </div>
+    </nav>
+
     <header class="header">
         <div class="header-inner">
             <a href="/" class="logo">
@@ -32,8 +43,8 @@
         <div class="home-screen">
             <div class="home-logo">🎬</div>
             <h1 class="home-title">Clipdle</h1>
-            <p class="home-subtitle">Which Twitch clip is ranked higher?</p>
-            <p class="home-description">Compare two clips side-by-side and guess which one has a higher community rating. Get all 8 right for a perfect score!</p>
+            <p class="home-subtitle">Which Arross clip is ranked higher?</p>
+            <p class="home-description">Compare two Arross clips side-by-side and guess which one the community ranked higher. Get all 8 right for a perfect score!</p>
 
             <div class="home-buttons">
                 <button class="home-btn primary" id="playDailyBtn">
@@ -112,6 +123,23 @@
         </div>
     </template>
 
-    <script src="/clipdle/game.js"></script>
+    <!-- Floating Characters -->
+    <div class="floating-character float-1">
+        <img src="/images/goose-honk.png" alt="Honking Goose">
+    </div>
+    <div class="floating-character float-2">
+        <img src="/images/nugget-penguin.png" alt="Nugget Penguin">
+    </div>
+    <div class="floating-character float-3">
+        <img src="/images/banana-penguin.png" alt="Banana Penguin">
+    </div>
+    <div class="floating-character float-4">
+        <img src="/images/coffee-penguin.png" alt="Coffee Penguin">
+    </div>
+    <div class="floating-character float-5">
+        <img src="/images/goose-sit.png" alt="Sitting Goose">
+    </div>
+
+    <script src="/game.js"></script>
 </body>
 </html>

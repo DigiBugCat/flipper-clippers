@@ -138,6 +138,32 @@ function renderActivityItem(activity: ActivityEntry, showUser: boolean = true): 
 }
 
 /**
+ * Render global activity (shared by fresh fetch and cache)
+ */
+function renderGlobalActivity(
+  data: GlobalActivityResponse,
+  container: HTMLElement,
+  loadMoreBtn: HTMLElement | null
+): void {
+  container.innerHTML = '';
+
+  if (data.activities.length === 0) {
+    container.innerHTML = '<div class="empty-state">No activity yet. Be the first to vote!</div>';
+    if (loadMoreBtn) loadMoreBtn.classList.add('hidden');
+    return;
+  }
+
+  data.activities.forEach((activity: ActivityEntry) => {
+    container.insertAdjacentHTML('beforeend', renderActivityItem(activity, true));
+  });
+
+  globalOffset = data.activities.length;
+  if (loadMoreBtn) {
+    loadMoreBtn.classList.toggle('hidden', data.activities.length < PAGE_SIZE);
+  }
+}
+
+/**
  * Load global activity feed
  */
 async function loadGlobalActivity(append: boolean = false): Promise<void> {
@@ -148,11 +174,26 @@ async function loadGlobalActivity(append: boolean = false): Promise<void> {
 
   if (!append) {
     globalOffset = 0;
+  }
+
+  const apiUrl = `/api/feed/global?limit=${PAGE_SIZE}&offset=${globalOffset}`;
+
+  // Check for prefetched data (only for initial load)
+  if (!append && globalOffset === 0 && window.getCachedApiData) {
+    const cached = window.getCachedApiData<GlobalActivityResponse>(apiUrl);
+    if (cached) {
+      console.debug('[Feed] Using prefetched data');
+      renderGlobalActivity(cached, container, loadMoreBtn);
+      return;
+    }
+  }
+
+  if (!append) {
     container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   }
 
   try {
-    const response: Response = await fetch(`/api/feed/global?limit=${PAGE_SIZE}&offset=${globalOffset}`);
+    const response: Response = await fetch(apiUrl);
     if (!response.ok) throw new Error('Failed to load activity');
 
     const data: GlobalActivityResponse = await response.json();
@@ -303,28 +344,42 @@ function loadMoreMy(): void {
 }
 
 /**
+ * Set up event listeners for static HTML elements
+ */
+function setupEventListeners(): void {
+  // Tab buttons
+  document.getElementById('tab-global')?.addEventListener('click', () => switchTab('global'));
+  document.getElementById('tab-trending')?.addEventListener('click', () => switchTab('trending'));
+  document.getElementById('tab-my')?.addEventListener('click', () => switchTab('my'));
+
+  // Load more buttons
+  document.getElementById('load-more-global')?.addEventListener('click', loadMoreGlobal);
+  document.getElementById('load-more-my')?.addEventListener('click', loadMoreMy);
+
+  // Period select
+  document.getElementById('period-select')?.addEventListener('change', loadTrending);
+}
+
+/**
  * Initialize page
  */
 async function init(): Promise<void> {
+  setupEventListeners();
   await checkAuth();
   loadGlobalActivity();
 }
 
-// Start
-init();
+// Initialize on DOM ready
+document.addEventListener('DOMContentLoaded', init);
 
-// Make functions available globally for inline onclick handlers
-declare global {
-  interface Window {
-    // Note: switchTab is typed loosely to allow different page implementations
-    switchTab: (tab: string) => void | Promise<void>;
-    loadMoreGlobal: typeof loadMoreGlobal;
-    loadMoreMy: typeof loadMoreMy;
-    loadTrending: typeof loadTrending;
+// Support SPA navigation - reinitialize on content swap
+window.addEventListener('spa:pageload', (e: Event) => {
+  const detail = (e as CustomEvent).detail;
+  if (detail.pathname === '/feed' || detail.pathname === '/feed.html') {
+    // Reset state for fresh load
+    currentTab = 'global';
+    globalOffset = 0;
+    myOffset = 0;
+    init();
   }
-}
-
-window.switchTab = switchTab as (tab: string) => void | Promise<void>;
-window.loadMoreGlobal = loadMoreGlobal;
-window.loadMoreMy = loadMoreMy;
-window.loadTrending = loadTrending;
+});

@@ -11,6 +11,18 @@ interface UserStatsResponse {
   totalSuperLikes: number;
 }
 
+interface VoteResponse {
+  success: boolean;
+  newRatings: {
+    clipA: { id: number; elo: number };
+    clipB: { id: number; elo: number };
+  };
+  stats?: {
+    totalComparisons: number;
+    totalSuperLikes: number;
+  };
+}
+
 interface CheckSavedResponse {
   saved: Record<number, boolean>;
 }
@@ -45,6 +57,18 @@ interface HistoryState {
   clipB: Clip;
 }
 
+// Extended ClipPair response with prefetch info
+interface ClipPairResponse extends ClipPair {
+  remainingPairs?: number;
+  batchSize?: number;
+}
+
+// Peek response for prefetching
+interface PeekResponse {
+  pairs: ClipPair[];
+  remainingCount: number;
+}
+
 // Page state
 let clipA: Clip | null = null;
 let clipB: Clip | null = null;
@@ -57,6 +81,162 @@ let isRankingMode: boolean = false;
 let isRerankMode: boolean = false;
 let rankingClipId: string | null = null;
 let rankingClip: Clip | null = null;
+
+// Prefetch state
+let prefetchedPairs: ClipPair[] = [];
+let prefetchInProgress: boolean = false;
+const PREFETCH_THRESHOLD = 3; // Trigger batch refresh when this many pairs left
+const PREFETCH_COUNT = 3; // Number of pairs to prefetch
+
+// Local stats tracking (for optimistic UI updates during rapid voting)
+let localComparisons: number = 0;
+let localSuperLikes: number = 0;
+
+// In-place preload tracking
+let preloadedSlugA: string | null = null;
+let preloadedSlugB: string | null = null;
+
+/**
+ * Prefetch a thumbnail image using link rel="prefetch"
+ */
+function prefetchThumbnail(twitchSlug: string): void {
+  // Use the same thumbnail URL format as getTwitchThumbnail in app.ts
+  const thumbnailUrl = `https://clips-media-assets2.twitch.tv/${twitchSlug}-preview-480x272.jpg`;
+
+  // Check if already prefetched
+  if (document.querySelector(`link[href="${thumbnailUrl}"]`)) {
+    return;
+  }
+
+  const link = document.createElement('link');
+  link.rel = 'prefetch';
+  link.as = 'image';
+  link.href = thumbnailUrl;
+  document.head.appendChild(link);
+}
+
+/**
+ * Preload a Twitch embed iframe in-place as a hidden overlay
+ */
+function preloadEmbedInPlace(slug: string, wrapperId: string, overlayId: string): void {
+  const wrapper = document.getElementById(wrapperId);
+  if (!wrapper) return;
+
+  // Remove any existing preload overlay
+  document.getElementById(overlayId)?.remove();
+
+  // Create new overlay with iframe
+  const overlay = document.createElement('div');
+  overlay.id = overlayId;
+  overlay.className = 'preload-overlay';
+  overlay.innerHTML = `
+    <iframe
+      src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(slug)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=false"
+      allowfullscreen
+    ></iframe>
+  `;
+  wrapper.appendChild(overlay);
+  console.debug(`[Preload] Created in-place overlay for ${slug}`);
+}
+
+/**
+ * Preload the next pair's embeds as hidden overlays
+ */
+function preloadNextPairInPlace(nextClipA: Clip, nextClipB: Clip): void {
+  preloadEmbedInPlace(nextClipA.twitchSlug, 'video-wrapper-a', 'preload-a');
+  preloadEmbedInPlace(nextClipB.twitchSlug, 'video-wrapper-b', 'preload-b');
+  preloadedSlugA = nextClipA.twitchSlug;
+  preloadedSlugB = nextClipB.twitchSlug;
+}
+
+/**
+ * Show embed - use preloaded overlay if available, otherwise create fresh
+ */
+function showEmbed(slug: string, wrapperId: string, overlayId: string, currentId: string): void {
+  const wrapper = document.getElementById(wrapperId);
+  if (!wrapper) return;
+
+  // Remove current embed
+  document.getElementById(currentId)?.remove();
+
+  // Check if we have a preloaded overlay for this slug
+  const preload = document.getElementById(overlayId);
+  const preloadedSlug = overlayId === 'preload-a' ? preloadedSlugA : preloadedSlugB;
+
+  if (preload && preloadedSlug === slug) {
+    // Activate the preloaded overlay (no DOM move - just toggle visibility)
+    preload.classList.add('active');
+    preload.id = currentId; // Rename to current
+    console.debug(`[Preload] Activated preloaded embed for ${slug}`);
+  } else {
+    // Fallback: create fresh embed
+    preload?.remove();
+    const div = document.createElement('div');
+    div.id = currentId;
+    div.className = 'preload-overlay active';
+    div.innerHTML = `
+      <iframe
+        src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(slug)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=false"
+        allowfullscreen
+      ></iframe>
+    `;
+    wrapper.appendChild(div);
+  }
+
+  // Reset preloaded slug tracking
+  if (overlayId === 'preload-a') preloadedSlugA = null;
+  else preloadedSlugB = null;
+}
+
+/**
+ * Clear preload state (used when leaving compare page)
+ */
+function clearPreloadState(): void {
+  preloadedSlugA = null;
+  preloadedSlugB = null;
+  document.getElementById('preload-a')?.remove();
+  document.getElementById('preload-b')?.remove();
+}
+
+/**
+ * Prefetch upcoming clip pairs and their thumbnails
+ */
+async function prefetchUpcomingPairs(): Promise<void> {
+  if (prefetchInProgress) return;
+
+  prefetchInProgress = true;
+
+  try {
+    const response = await fetch(`/api/compare/peek?count=${PREFETCH_COUNT}`);
+
+    if (!response.ok) {
+      console.debug('Prefetch peek failed:', response.status);
+      return;
+    }
+
+    const data: PeekResponse = await response.json();
+
+    // Store prefetched pairs for instant loading
+    prefetchedPairs = data.pairs;
+
+    // Prefetch thumbnails for all upcoming clips
+    for (const pair of data.pairs) {
+      prefetchThumbnail(pair.clipA.twitchSlug);
+      prefetchThumbnail(pair.clipB.twitchSlug);
+    }
+
+    // Preload embeds for FIRST upcoming pair only (in-place)
+    if (data.pairs.length > 0) {
+      preloadNextPairInPlace(data.pairs[0].clipA, data.pairs[0].clipB);
+    }
+
+    console.debug(`[Prefetch] ${data.pairs.length} pairs, ${data.remainingCount} remaining in batch`);
+  } catch (error) {
+    console.debug('Prefetch failed:', error);
+  } finally {
+    prefetchInProgress = false;
+  }
+}
 
 /**
  * Update the browser URL with current clip IDs
@@ -104,9 +284,9 @@ function displayClips(a: Clip, b: Clip): void {
   if (linkA) linkA.href = a.twitchUrl || `https://clips.twitch.tv/${a.twitchSlug}`;
   if (linkB) linkB.href = b.twitchUrl || `https://clips.twitch.tv/${b.twitchSlug}`;
 
-  // Create embeds
-  window.createTwitchEmbed(a.twitchSlug, 'video-wrapper-a');
-  window.createTwitchEmbed(b.twitchSlug, 'video-wrapper-b');
+  // Create embeds (use preloaded if available)
+  showEmbed(a.twitchSlug, 'video-wrapper-a', 'preload-a', 'current-a');
+  showEmbed(b.twitchSlug, 'video-wrapper-b', 'preload-b', 'current-b');
 
   // Check saved states
   checkSavedStates();
@@ -233,14 +413,18 @@ async function loadStats(): Promise<void> {
 
     const data: UserStatsResponse = await response.json();
 
+    // Initialize local tracking from server values
+    localComparisons = data.totalComparisons || 0;
+    localSuperLikes = data.totalSuperLikes || 0;
+
     const comparisonsEl = document.getElementById('user-comparisons');
     const superLikesEl = document.getElementById('user-super-likes');
 
     if (comparisonsEl) {
-      comparisonsEl.textContent = window.formatNumber(data.totalComparisons || 0);
+      comparisonsEl.textContent = window.formatNumber(localComparisons);
     }
     if (superLikesEl) {
-      superLikesEl.textContent = window.formatNumber(data.totalSuperLikes || 0);
+      superLikesEl.textContent = window.formatNumber(localSuperLikes);
     }
   } catch (error) {
     console.error('Failed to load stats:', error);
@@ -267,7 +451,7 @@ async function loadNextPair(): Promise<void> {
       throw new Error('Failed to load clips');
     }
 
-    const data: ClipPair = await response.json();
+    const data: ClipPairResponse = await response.json();
 
     clipA = data.clipA;
     clipB = data.clipB;
@@ -305,9 +489,9 @@ async function loadNextPair(): Promise<void> {
       linkB.href = clipB.twitchUrl || `https://clips.twitch.tv/${clipB.twitchSlug}`;
     }
 
-    // Create embeds
-    window.createTwitchEmbed(clipA.twitchSlug, 'video-wrapper-a');
-    window.createTwitchEmbed(clipB.twitchSlug, 'video-wrapper-b');
+    // Create embeds (use in-place preloaded if available, otherwise fresh)
+    showEmbed(clipA.twitchSlug, 'video-wrapper-a', 'preload-a', 'current-a');
+    showEmbed(clipB.twitchSlug, 'video-wrapper-b', 'preload-b', 'current-b');
 
     // Update URL for browser history
     updateUrl(clipA, clipB);
@@ -316,6 +500,14 @@ async function loadNextPair(): Promise<void> {
     await checkSavedStates();
 
     showLoading(false);
+
+    // Trigger prefetch if remaining pairs is low (don't await - fire and forget)
+    if (
+      typeof data.remainingPairs === 'number' &&
+      data.remainingPairs <= PREFETCH_THRESHOLD
+    ) {
+      prefetchUpcomingPairs();
+    }
   } catch (error) {
     console.error('Failed to load clips:', error);
     window.showToast('Failed to load clips', 'error');
@@ -357,6 +549,25 @@ async function vote(result: VoteResult): Promise<void> {
       throw new Error('Vote failed');
     }
 
+    const data: VoteResponse = await response.json();
+
+    // Increment local stats immediately (don't wait for async queue)
+    localComparisons++;
+    if (result.startsWith('super')) {
+      localSuperLikes++;
+    }
+
+    // Update UI with local values
+    const comparisonsEl = document.getElementById('user-comparisons');
+    const superLikesEl = document.getElementById('user-super-likes');
+
+    if (comparisonsEl) {
+      comparisonsEl.textContent = window.formatNumber(localComparisons);
+    }
+    if (superLikesEl) {
+      superLikesEl.textContent = window.formatNumber(localSuperLikes);
+    }
+
     // Show feedback for super likes
     if (result.startsWith('super')) {
       window.showToast('Super Like!', 'success');
@@ -365,8 +576,7 @@ async function vote(result: VoteResult): Promise<void> {
     // Reset loading state before loading next pair
     isLoading = false;
 
-    // Reload stats and next pair
-    await loadStats();
+    // Load next pair (no need to reload stats - we have them from response)
     await loadNextPair();
   } catch (error) {
     console.error('Vote failed:', error);
@@ -505,9 +715,9 @@ function displayRankingComparison(
   if (linkB && compareWith)
     linkB.href = compareWith.twitchUrl || `https://clips.twitch.tv/${compareWith.twitchSlug}`;
 
-  // Create embeds
-  if (clipToRank) window.createTwitchEmbed(clipToRank.twitchSlug, 'video-wrapper-a');
-  if (compareWith) window.createTwitchEmbed(compareWith.twitchSlug, 'video-wrapper-b');
+  // Create embeds (use preloaded if available)
+  if (clipToRank) showEmbed(clipToRank.twitchSlug, 'video-wrapper-a', 'preload-a', 'current-a');
+  if (compareWith) showEmbed(compareWith.twitchSlug, 'video-wrapper-b', 'preload-b', 'current-b');
 
   // Update progress indicator
   const progressEl = document.getElementById('ranking-progress');
@@ -572,9 +782,29 @@ async function submitRankingVote(result: VoteResult): Promise<void> {
 }
 
 /**
+ * Set up event listeners for static HTML elements
+ */
+function setupEventListeners(): void {
+  // Save buttons
+  document.getElementById('save-a')?.addEventListener('click', () => toggleSave('a'));
+  document.getElementById('save-b')?.addEventListener('click', () => toggleSave('b'));
+
+  // Vote buttons
+  document.getElementById('vote-super-a')?.addEventListener('click', () => vote('super_a'));
+  document.getElementById('vote-clip-a')?.addEventListener('click', () => vote('clip_a'));
+  document.getElementById('vote-tie')?.addEventListener('click', () => vote('tie'));
+  document.getElementById('vote-clip-b')?.addEventListener('click', () => vote('clip_b'));
+  document.getElementById('vote-super-b')?.addEventListener('click', () => vote('super_b'));
+  document.getElementById('vote-skip')?.addEventListener('click', () => vote('skip'));
+}
+
+/**
  * Initialize the compare page
  */
 async function initComparePage(): Promise<void> {
+  // Set up event listeners first
+  setupEventListeners();
+
   const user: User | null = await window.checkAuth();
 
   const authRequired = document.getElementById('auth-required');
@@ -619,6 +849,9 @@ async function initComparePage(): Promise<void> {
   } else {
     await loadNextPair();
   }
+
+  // Start prefetching immediately after first load (fire and forget)
+  prefetchUpcomingPairs();
 
   // Set up keyboard shortcuts
   document.addEventListener('keydown', handleKeyboard);
@@ -674,21 +907,16 @@ export {
   initRankingMode,
 };
 
-// Extend Window interface for global access
-declare global {
-  interface Window {
-    vote: typeof vote;
-    toggleSave: typeof toggleSave;
-    loadNextPair: typeof loadNextPair;
-    initComparePage: typeof initComparePage;
-  }
-}
-
-// Make functions available globally for onclick handlers
-window.vote = vote;
-window.toggleSave = toggleSave;
-window.loadNextPair = loadNextPair;
-window.initComparePage = initComparePage;
-
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', initComparePage);
+
+// Support SPA navigation - reinitialize on content swap
+window.addEventListener('spa:pageload', (e: Event) => {
+  const detail = (e as CustomEvent).detail;
+  if (detail.pathname === '/compare' || detail.pathname === '/compare.html') {
+    initComparePage();
+  } else {
+    // Clear preloaded embeds when leaving compare page
+    clearPreloadState();
+  }
+});

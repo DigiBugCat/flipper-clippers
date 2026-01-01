@@ -39,3 +39,29 @@ crons = ["0 0 * * *"]  # Daily at midnight UTC
 [placement]
 mode = "smart"
 
+# Analytics Engine for vote audit log (replaces D1 comparisons writes)
+[[analytics_engine_datasets]]
+binding = "VOTES_ANALYTICS"
+dataset = "clip_votes"
+
+# Durable Objects for aggregation coordination
+[durable_objects]
+bindings = [
+  { name = "AGGREGATION_COORDINATOR", class_name = "AggregationCoordinator" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["AggregationCoordinator"]
+
+# Queues for async vote processing
+[[queues.producers]]
+binding = "VOTE_QUEUE"
+queue = "flipper-votes"
+
+[[queues.consumers]]
+queue = "flipper-votes"
+max_batch_size = 100
+max_batch_timeout = 5
+max_retries = 3
+
