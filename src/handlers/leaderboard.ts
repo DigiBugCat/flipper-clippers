@@ -4,6 +4,7 @@ import type { Env, Clip } from '../types';
 import {
   getGlobalLeaderboard,
   getUserLeaderboard,
+  getUserLeaderboardSorted,
   initializeManualPositions,
   reorderPersonalRanking,
   getUserClipsSortedByElo,
@@ -11,11 +12,15 @@ import {
   upsertUserClipRating,
   getClipById,
   getVoterLeaderboard,
+  deleteUserClipRating,
+  getUserVoteHistoryForClip,
+  deleteComparison,
   type SortField,
   type SortOrder,
+  type PersonalSortField,
 } from '../db/queries';
 import { calculateConfidence } from '../services/rating';
-import { getAggregationStats, aggregateGlobalRankings } from '../services/aggregation';
+import { getAggregationStats } from '../services/aggregation';
 import { setRankingSession } from './clips';
 import { getCachedSession } from './auth';
 
@@ -34,18 +39,41 @@ interface CachedLeaderboard {
   timestamp: number;
 }
 
+// Helper to trigger aggregation via Durable Object
+async function triggerAggregationViaDoIfAvailable(env: Env): Promise<void> {
+  // Use DO for aggregation coordination if available
+  if (env.AGGREGATION_COORDINATOR) {
+    try {
+      const doId = env.AGGREGATION_COORDINATOR.idFromName('global');
+      const stub = env.AGGREGATION_COORDINATOR.get(doId);
+      const response = await stub.fetch('https://do/trigger');
+      const result = await response.json<{ status: string }>();
+      console.log(`[LEADERBOARD] DO aggregation result: ${result.status}`);
+    } catch (error) {
+      console.error('[LEADERBOARD] DO aggregation failed, falling back to direct:', error);
+      // Fallback: import and call directly if DO fails
+      const { aggregateGlobalRankings } = await import('../services/aggregation');
+      await aggregateGlobalRankings(env.DB);
+    }
+  } else {
+    // No DO available (testing) - call aggregation directly
+    const { aggregateGlobalRankings } = await import('../services/aggregation');
+    await aggregateGlobalRankings(env.DB);
+  }
+}
+
 // Helper to generate leaderboard response
 async function generateLeaderboardResponse(
-  db: D1Database,
+  env: Env,
   limit: number,
   offset: number,
   sort: SortField,
   order: SortOrder
 ) {
-  // Run aggregation if needed
-  await aggregateGlobalRankings(db);
+  // Run aggregation via DO if needed
+  await triggerAggregationViaDoIfAvailable(env);
 
-  const { clips, total } = await getGlobalLeaderboard(db, limit, offset, sort, order);
+  const { clips, total } = await getGlobalLeaderboard(env.DB, limit, offset, sort, order);
   const totalPages = Math.ceil(total / limit);
 
   const ranked = clips.map((clip, index) => ({
@@ -59,7 +87,7 @@ async function generateLeaderboardResponse(
     wins: clip.global_wins,
     losses: clip.global_losses,
     ties: clip.global_ties,
-    superLikes: clip.global_super_likes,
+    globalSuperLikes: clip.global_super_likes,
     winRate: clip.global_matches > 0 ? Math.round((clip.global_wins / clip.global_matches) * 100) : 0,
     confidence: Math.round(calculateConfidence(clip.global_matches, clip.rating_deviation)),
   }));
@@ -106,7 +134,7 @@ leaderboard.get('/', async (c) => {
       c.executionCtx.waitUntil(
         (async () => {
           try {
-            const fresh = await generateLeaderboardResponse(c.env.DB, limit, offset, sort, order);
+            const fresh = await generateLeaderboardResponse(c.env, limit, offset, sort, order);
             await c.env.SESSION_CACHE.put(
               cacheKey,
               JSON.stringify({ data: fresh, timestamp: Date.now() }),
@@ -135,7 +163,7 @@ leaderboard.get('/', async (c) => {
 
   // Cache miss - generate fresh data
   console.log(`[LEADERBOARD] Cache MISS, generating fresh data...`);
-  const data = await generateLeaderboardResponse(c.env.DB, limit, offset, sort, order);
+  const data = await generateLeaderboardResponse(c.env, limit, offset, sort, order);
 
   // Store in KV cache
   await c.env.SESSION_CACHE.put(
@@ -150,6 +178,9 @@ leaderboard.get('/', async (c) => {
   return c.json(data);
 });
 
+// Valid personal sort fields
+const VALID_PERSONAL_SORT_FIELDS: PersonalSortField[] = ['elo', 'recent', 'matches'];
+
 // Get user's personal leaderboard
 leaderboard.get('/me', async (c) => {
   const sessionId = getCookie(c, 'session');
@@ -163,14 +194,21 @@ leaderboard.get('/me', async (c) => {
     return c.json({ error: 'Invalid session' }, 401);
   }
 
-  console.log(`[LEADERBOARD] GET /me user=${cached.user.id}`);
+  const sortParam = c.req.query('sort') ?? 'elo';
+  const sort: PersonalSortField = VALID_PERSONAL_SORT_FIELDS.includes(sortParam as PersonalSortField)
+    ? (sortParam as PersonalSortField)
+    : 'elo';
+
+  console.log(`[LEADERBOARD] GET /me user=${cached.user.id} sort=${sort}`);
   const startTime = Date.now();
 
-  // Initialize manual positions if not set
-  await initializeManualPositions(c.env.DB, cached.session.user_id);
+  // Initialize manual positions if not set (only needed for elo sort)
+  if (sort === 'elo') {
+    await initializeManualPositions(c.env.DB, cached.session.user_id);
+  }
 
-  const limit = parseInt(c.req.query('limit') ?? '50', 10);
-  const clips = await getUserLeaderboard(c.env.DB, cached.session.user_id, limit);
+  const limit = parseInt(c.req.query('limit') ?? '100', 10);
+  const clips = await getUserLeaderboardSorted(c.env.DB, cached.session.user_id, limit, sort);
   console.log(`[LEADERBOARD] GET /me returned ${clips.length} clips in ${Date.now() - startTime}ms`);
 
   const ranked = clips.map((clip, index) => ({
@@ -183,9 +221,11 @@ leaderboard.get('/me', async (c) => {
     elo: Math.round(clip.user_elo),
     globalElo: Math.round(clip.global_elo),
     manualPosition: clip.manual_position,
+    matchesPlayed: clip.matches_played,
+    updatedAt: clip.updated_at,
   }));
 
-  return c.json({ leaderboard: ranked });
+  return c.json({ leaderboard: ranked, sort });
 });
 
 // Reorder personal leaderboard
@@ -214,6 +254,82 @@ leaderboard.put('/me/reorder', async (c) => {
     clipsBeaten: result.clipsBeaten,
     globalRankingUpdated: result.clipsBeaten > 0,
   });
+});
+
+// Delete a clip from personal rankings
+leaderboard.delete('/me/:clipId', async (c) => {
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: 'Authentication required' }, 401);
+  }
+
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
+    return c.json({ error: 'Invalid session' }, 401);
+  }
+
+  const clipId = parseInt(c.req.param('clipId'), 10);
+  if (isNaN(clipId)) {
+    return c.json({ error: 'Invalid clip ID' }, 400);
+  }
+
+  console.log(`[LEADERBOARD] DELETE /me/${clipId} user=${cached.user.id}`);
+
+  await deleteUserClipRating(c.env.DB, cached.user.id, clipId);
+
+  return c.json({ success: true });
+});
+
+// Get vote history for a specific clip
+leaderboard.get('/me/history/:clipId', async (c) => {
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: 'Authentication required' }, 401);
+  }
+
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
+    return c.json({ error: 'Invalid session' }, 401);
+  }
+
+  const clipId = parseInt(c.req.param('clipId'), 10);
+  if (isNaN(clipId)) {
+    return c.json({ error: 'Invalid clip ID' }, 400);
+  }
+
+  console.log(`[LEADERBOARD] GET /me/history/${clipId} user=${cached.user.id}`);
+
+  const votes = await getUserVoteHistoryForClip(c.env.DB, cached.user.id, clipId);
+
+  return c.json({ votes });
+});
+
+// Delete a single vote from history
+leaderboard.delete('/me/history/:comparisonId', async (c) => {
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: 'Authentication required' }, 401);
+  }
+
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
+    return c.json({ error: 'Invalid session' }, 401);
+  }
+
+  const comparisonId = parseInt(c.req.param('comparisonId'), 10);
+  if (isNaN(comparisonId)) {
+    return c.json({ error: 'Invalid comparison ID' }, 400);
+  }
+
+  console.log(`[LEADERBOARD] DELETE /me/history/${comparisonId} user=${cached.user.id}`);
+
+  const deleted = await deleteComparison(c.env.DB, comparisonId, cached.user.id);
+
+  if (!deleted) {
+    return c.json({ error: 'Vote not found or not yours' }, 404);
+  }
+
+  return c.json({ success: true });
 });
 
 // Get leaderboard stats
@@ -470,7 +586,7 @@ leaderboard.get('/admin/voters', async (c) => {
       profileImage: user.twitch_profile_image,
       totalVotes: user.total_comparisons,
       superLikes: user.total_super_likes,
-      lastLogin: user.last_login,
+      lastLogin: user.last_active,
     })),
     total: voters.length,
   });

@@ -4,7 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Leaderboard - Flipper Clippers</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="/css/styles.css">
+  <!-- DNS prefetch for Twitch CDN -->
+  <link rel="dns-prefetch" href="//clips.twitch.tv">
+  <link rel="dns-prefetch" href="//static-cdn.jtvnw.net">
+  <link rel="preconnect" href="https://clips.twitch.tv" crossorigin>
 </head>
 <body>
   <!-- Navigation -->
@@ -14,7 +19,9 @@
       <div class="nav-links">
         <a href="/compare" class="nav-link">Compare</a>
         <a href="/leaderboard" class="nav-link active">Leaderboard</a>
+        <a href="/feed" class="nav-link">Feed</a>
         <a href="/saved" class="nav-link">Saved</a>
+        <a href="https://clipdle.arross.tv/" class="nav-link">Clipdle</a>
       </div>
       <div class="nav-user" id="nav-user">
         <a href="/api/auth/login" class="btn btn-primary">Sign In with Twitch</a>
@@ -28,13 +35,13 @@
 
     <!-- Tabs -->
     <div class="tabs">
-      <button class="tab-btn active" id="tab-global" onclick="switchTab('global')">
+      <button class="tab-btn active" id="tab-global">
         Global Rankings
       </button>
-      <button class="tab-btn" id="tab-personal" onclick="switchTab('personal')">
+      <button class="tab-btn" id="tab-personal">
         My Rankings
       </button>
-      <button class="tab-btn hidden" id="tab-voters" onclick="switchTab('voters')">
+      <button class="tab-btn hidden" id="tab-voters">
         Voter Stats
       </button>
     </div>
@@ -51,13 +58,13 @@
       <div class="leaderboard-controls">
         <div class="sort-control">
           <label for="sort-select">Sort by:</label>
-          <select id="sort-select" onchange="handleSortChange()">
+          <select id="sort-select">
             <option value="elo">ELO Rating</option>
             <option value="matches">Total Matches</option>
             <option value="winrate">Win Rate</option>
             <option value="superlikes">Super Likes</option>
           </select>
-          <button class="btn-order" id="order-btn" onclick="toggleSortOrder()" title="Toggle sort order">
+          <button class="btn-order" id="order-btn" title="Toggle sort order">
             <span id="order-icon">↓</span>
           </button>
         </div>
@@ -90,14 +97,26 @@
 
       <!-- Pagination Controls -->
       <div class="pagination-controls" id="pagination-controls">
-        <button class="btn-page" id="prev-btn" onclick="goToPage(currentPage - 1)" disabled>← Previous</button>
+        <button class="btn-page" id="prev-btn" disabled>← Previous</button>
         <span class="page-numbers" id="page-numbers"></span>
-        <button class="btn-page" id="next-btn" onclick="goToPage(currentPage + 1)" disabled>Next →</button>
+        <button class="btn-page" id="next-btn" disabled>Next →</button>
       </div>
     </div>
 
     <!-- Personal Rankings Section -->
     <div id="personal-section" class="hidden">
+      <!-- Personal Sort Controls -->
+      <div class="leaderboard-controls personal-controls">
+        <div class="sort-control">
+          <label for="personal-sort-select">Sort by:</label>
+          <select id="personal-sort-select">
+            <option value="elo">ELO Rating</option>
+            <option value="recent">Recently Voted</option>
+            <option value="matches">Most Matches</option>
+          </select>
+        </div>
+      </div>
+
       <p class="reorder-hint">Drag to reorder, use arrows, or type a rank number. Moving clips UP boosts their global ranking!</p>
 
       <!-- Empty State -->
@@ -136,7 +155,8 @@
   <div class="toast" id="toast"></div>
 
   <!-- Scripts -->
-  <script src="/js/app.js"></script>
-  <script src="/js/leaderboard.js"></script>
+  <script src="/js/app.js" defer></script>
+  <script src="/js/comments.js" defer></script>
+  <script src="/js/leaderboard.js" defer></script>
 </body>
 </html>

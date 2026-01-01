@@ -2,6 +2,16 @@
  * Frontend TypeScript types for API responses and shared data structures
  */
 
+// Extend Window interface for global state
+declare global {
+  interface Window {
+    /** Current logged-in user, set by app.ts on page load */
+    currentUser: User | null;
+    /** Show a toast notification */
+    showToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
+  }
+}
+
 // User from /api/auth/me response
 export interface User {
   id: number;
@@ -90,6 +100,8 @@ export interface SavedClipsResponse {
 // Personal ranking entry (extends LeaderboardEntry with superLikes)
 export interface PersonalRankingEntry extends LeaderboardEntry {
   superLikes: number;
+  matchesPlayed?: number;
+  updatedAt?: string;
 }
 
 // Pagination info from API responses
@@ -109,6 +121,26 @@ export interface LeaderboardResponse {
 // Personal leaderboard API response
 export interface PersonalLeaderboardResponse {
   leaderboard: PersonalRankingEntry[];
+  sort?: PersonalSortField;
+}
+
+// Personal leaderboard sort options
+export type PersonalSortField = 'elo' | 'recent' | 'matches';
+
+// Vote history entry
+export interface VoteHistoryEntry {
+  id: number;
+  opponent_id: number;
+  opponent_title: string | null;
+  opponent_slug: string;
+  result: string;
+  is_super_like: boolean;
+  created_at: string;
+}
+
+// Vote history response
+export interface VoteHistoryResponse {
+  votes: VoteHistoryEntry[];
 }
 
 // Add clip to personal rankings response

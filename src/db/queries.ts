@@ -721,18 +721,141 @@ export interface VoterStats {
   twitch_profile_image: string | null;
   total_comparisons: number;
   total_super_likes: number;
-  last_login: string;
+  last_active: string;
 }
 
 export async function getVoterLeaderboard(db: D1Database): Promise<VoterStats[]> {
   const result = await db
     .prepare(
       `SELECT id, twitch_username, twitch_display_name, twitch_profile_image,
-              total_comparisons, total_super_likes, last_login
+              total_comparisons, total_super_likes, last_active
        FROM users
        WHERE total_comparisons > 0
        ORDER BY total_comparisons DESC`
     )
     .all<VoterStats>();
   return result.results;
+}
+
+// Personal leaderboard sort options
+export type PersonalSortField = 'elo' | 'recent' | 'matches';
+
+export async function getUserLeaderboardSorted(
+  db: D1Database,
+  userId: number,
+  limit = 50,
+  sort: PersonalSortField = 'elo'
+): Promise<(Clip & { user_elo: number; manual_position: number | null; matches_played: number; updated_at: string })[]> {
+  let orderClause: string;
+
+  switch (sort) {
+    case 'recent':
+      orderClause = 'ucr.updated_at DESC';
+      break;
+    case 'matches':
+      orderClause = 'ucr.matches_played DESC, ucr.elo_rating DESC';
+      break;
+    case 'elo':
+    default:
+      orderClause = `
+        CASE WHEN ucr.manual_position IS NOT NULL THEN 0 ELSE 1 END,
+        ucr.manual_position ASC,
+        ucr.elo_rating DESC`;
+      break;
+  }
+
+  const result = await db
+    .prepare(
+      `SELECT c.*, ucr.elo_rating as user_elo, ucr.manual_position, ucr.matches_played, ucr.updated_at
+       FROM clips c
+       JOIN user_clip_ratings ucr ON c.id = ucr.clip_id
+       WHERE ucr.user_id = ? AND ucr.matches_played > 0
+       ORDER BY ${orderClause}
+       LIMIT ?`
+    )
+    .bind(userId, limit)
+    .all<Clip & { user_elo: number; manual_position: number | null; matches_played: number; updated_at: string }>();
+  return result.results;
+}
+
+// Remove clip from user's rankings
+export async function deleteUserClipRating(db: D1Database, userId: number, clipId: number): Promise<void> {
+  // Get the current position of the clip being removed
+  const rating = await db
+    .prepare('SELECT manual_position FROM user_clip_ratings WHERE user_id = ? AND clip_id = ?')
+    .bind(userId, clipId)
+    .first<{ manual_position: number | null }>();
+
+  if (!rating) return;
+
+  // Delete the clip rating
+  await db
+    .prepare('DELETE FROM user_clip_ratings WHERE user_id = ? AND clip_id = ?')
+    .bind(userId, clipId)
+    .run();
+
+  // If it had a manual position, shift all clips after it up by 1
+  if (rating.manual_position !== null) {
+    await db
+      .prepare('UPDATE user_clip_ratings SET manual_position = manual_position - 1 WHERE user_id = ? AND manual_position > ?')
+      .bind(userId, rating.manual_position)
+      .run();
+  }
+}
+
+// Vote history entry for a clip
+export interface VoteHistoryEntry {
+  id: number;
+  opponent_id: number;
+  opponent_title: string | null;
+  opponent_slug: string;
+  result: string;
+  is_super_like: boolean;
+  created_at: string;
+}
+
+// Get vote history for a specific clip
+export async function getUserVoteHistoryForClip(
+  db: D1Database,
+  userId: number,
+  clipId: number
+): Promise<VoteHistoryEntry[]> {
+  const result = await db
+    .prepare(
+      `SELECT
+         c.id,
+         CASE WHEN c.clip_a_id = ? THEN cb.id ELSE ca.id END as opponent_id,
+         CASE WHEN c.clip_a_id = ? THEN cb.title ELSE ca.title END as opponent_title,
+         CASE WHEN c.clip_a_id = ? THEN cb.twitch_slug ELSE ca.twitch_slug END as opponent_slug,
+         c.result,
+         CASE WHEN c.result = 'super_like' THEN 1 ELSE 0 END as is_super_like,
+         c.created_at
+       FROM comparisons c
+       JOIN clips ca ON c.clip_a_id = ca.id
+       JOIN clips cb ON c.clip_b_id = cb.id
+       WHERE c.user_id = ? AND (c.clip_a_id = ? OR c.clip_b_id = ?)
+       ORDER BY c.created_at DESC`
+    )
+    .bind(clipId, clipId, clipId, userId, clipId, clipId)
+    .all<VoteHistoryEntry>();
+  return result.results;
+}
+
+// Delete a single comparison and return whether it was deleted
+export async function deleteComparison(db: D1Database, comparisonId: number, userId: number): Promise<boolean> {
+  // Verify the comparison belongs to this user and get clip IDs
+  const comparison = await db
+    .prepare('SELECT clip_a_id, clip_b_id FROM comparisons WHERE id = ? AND user_id = ?')
+    .bind(comparisonId, userId)
+    .first<{ clip_a_id: number; clip_b_id: number }>();
+
+  if (!comparison) return false;
+
+  // Delete the comparison
+  await db
+    .prepare('DELETE FROM comparisons WHERE id = ?')
+    .bind(comparisonId)
+    .run();
+
+  return true;
 }
