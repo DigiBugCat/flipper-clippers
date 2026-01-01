@@ -241,17 +241,43 @@ export async function recordPairing(db: D1Database, userId: number, clipAId: num
 }
 
 // Leaderboard queries
-export async function getGlobalLeaderboard(db: D1Database, limit = 50, offset = 0): Promise<Clip[]> {
+export type SortField = 'elo' | 'matches' | 'winrate' | 'superlikes';
+export type SortOrder = 'asc' | 'desc';
+
+const SORT_COLUMNS: Record<SortField, string> = {
+  elo: 'global_elo',
+  matches: 'global_matches',
+  winrate: 'CASE WHEN global_matches > 0 THEN CAST(global_wins AS REAL) / global_matches ELSE 0 END',
+  superlikes: 'global_super_likes',
+};
+
+export async function getGlobalLeaderboard(
+  db: D1Database,
+  limit = 50,
+  offset = 0,
+  sort: SortField = 'elo',
+  order: SortOrder = 'desc'
+): Promise<{ clips: Clip[]; total: number }> {
+  const orderColumn = SORT_COLUMNS[sort] || SORT_COLUMNS.elo;
+  const orderDir = order === 'asc' ? 'ASC' : 'DESC';
+
+  // Get total count for pagination
+  const countResult = await db
+    .prepare('SELECT COUNT(*) as count FROM clips WHERE is_active = 1 AND global_matches > 0')
+    .first<{ count: number }>();
+  const total = countResult?.count ?? 0;
+
   const result = await db
     .prepare(
       `SELECT * FROM clips
        WHERE is_active = 1 AND global_matches > 0
-       ORDER BY global_elo DESC
+       ORDER BY ${orderColumn} ${orderDir}
        LIMIT ? OFFSET ?`
     )
     .bind(limit, offset)
     .all<Clip>();
-  return result.results;
+
+  return { clips: result.results, total };
 }
 
 export async function getUserLeaderboard(db: D1Database, userId: number, limit = 50): Promise<(Clip & { user_elo: number; manual_position: number | null })[]> {
@@ -537,4 +563,28 @@ export async function reorderSavedClip(db: D1Database, userId: number, clipId: n
     .prepare('UPDATE saved_clips SET position = ? WHERE user_id = ? AND clip_id = ?')
     .bind(boundedNewPosition, userId, clipId)
     .run();
+}
+
+// Admin: Get voter leaderboard (users sorted by vote count)
+export interface VoterStats {
+  id: number;
+  twitch_username: string;
+  twitch_display_name: string | null;
+  twitch_profile_image: string | null;
+  total_comparisons: number;
+  total_super_likes: number;
+  last_login: string;
+}
+
+export async function getVoterLeaderboard(db: D1Database): Promise<VoterStats[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, twitch_username, twitch_display_name, twitch_profile_image,
+              total_comparisons, total_super_likes, last_login
+       FROM users
+       WHERE total_comparisons > 0
+       ORDER BY total_comparisons DESC`
+    )
+    .all<VoterStats>();
+  return result.results;
 }

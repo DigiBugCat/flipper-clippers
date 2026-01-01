@@ -34,6 +34,9 @@
       <button class="tab-btn" id="tab-personal" onclick="switchTab('personal')">
         My Rankings
       </button>
+      <button class="tab-btn hidden" id="tab-voters" onclick="switchTab('voters')">
+        Voter Stats
+      </button>
     </div>
 
     <!-- Loading State -->
@@ -44,6 +47,25 @@
 
     <!-- Global Rankings Section -->
     <div id="global-section">
+      <!-- Sort & Pagination Controls -->
+      <div class="leaderboard-controls">
+        <div class="sort-control">
+          <label for="sort-select">Sort by:</label>
+          <select id="sort-select" onchange="handleSortChange()">
+            <option value="elo">ELO Rating</option>
+            <option value="matches">Total Matches</option>
+            <option value="winrate">Win Rate</option>
+            <option value="superlikes">Super Likes</option>
+          </select>
+          <button class="btn-order" id="order-btn" onclick="toggleSortOrder()" title="Toggle sort order">
+            <span id="order-icon">↓</span>
+          </button>
+        </div>
+        <div class="pagination-info" id="pagination-info">
+          <!-- Filled by JS -->
+        </div>
+      </div>
+
       <div class="table-container">
         <table>
           <thead>
@@ -51,17 +73,26 @@
               <th>Rank</th>
               <th>Preview</th>
               <th>Clip</th>
+              <th>ELO</th>
               <th>Matches</th>
+              <th>Win Rate</th>
               <th>Super Likes</th>
-              <th class="action-column">Add</th>
+              <th class="action-column"></th>
             </tr>
           </thead>
           <tbody id="global-body">
             <tr>
-              <td colspan="6" class="empty-state">Loading...</td>
+              <td colspan="8" class="empty-state">Loading...</td>
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Pagination Controls -->
+      <div class="pagination-controls" id="pagination-controls">
+        <button class="btn-page" id="prev-btn" onclick="goToPage(currentPage - 1)" disabled>← Previous</button>
+        <span class="page-numbers" id="page-numbers"></span>
+        <button class="btn-page" id="next-btn" onclick="goToPage(currentPage + 1)" disabled>Next →</button>
       </div>
     </div>
 
@@ -76,6 +107,28 @@
 
       <!-- Reorderable List -->
       <div id="personal-list" class="saved-list"></div>
+    </div>
+
+    <!-- Voter Stats Section (Admin Only) -->
+    <div id="voters-section" class="hidden">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>User</th>
+              <th>Total Votes</th>
+              <th>Super Likes</th>
+              <th>Last Active</th>
+            </tr>
+          </thead>
+          <tbody id="voters-body">
+            <tr>
+              <td colspan="5" class="empty-state">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
