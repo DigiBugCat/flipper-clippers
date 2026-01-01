@@ -2,9 +2,10 @@ name = "flipper-clippers"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
-# Custom domain
+# Custom domains
 routes = [
-  { pattern = "flipper-clippers.arross.tv", custom_domain = true }
+  { pattern = "flipper-clippers.arross.tv", custom_domain = true },
+  { pattern = "clipdle.arross.tv", custom_domain = true }
 ]
 
 # Static assets from public folder
@@ -17,9 +18,21 @@ binding = "DB"
 database_name = "clip-ranker-db"
 database_id = "7154d07b-e848-402a-a4e7-df008883bad4"
 
+# KV Namespace for thumbnail cache
+[[kv_namespaces]]
+binding = "THUMBNAIL_CACHE"
+id = "c89c6fa414414250bbe533027b37aac4"
+preview_id = "c3ee3947410547259cba928e8215cddc"
+
+[[kv_namespaces]]
+binding = "SESSION_CACHE"
+id = "69e141f39cec4084b33dda454fc4903f"
+preview_id = "d19ee8cbb9b14ff9abceb5c55476f04c"
+
 [vars]
 TWITCH_CLIENT_ID = "bcsrqxz7j1ivepc5g2bfnreok2x2g0"
 
-# Cron Triggers - runs aggregation every 5 minutes
+# Scheduled triggers for daily clip sync
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["0 0 * * *"]  # Daily at midnight UTC
+

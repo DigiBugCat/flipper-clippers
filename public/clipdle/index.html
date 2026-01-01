@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clipdle - Which Clip is Ranked Higher?</title>
+    <link rel="stylesheet" href="/clipdle/styles.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-inner">
+            <a href="/" class="logo">
+                <span class="logo-icon">🎬</span>
+                <span class="logo-text">Clip<span>dle</span></span>
+            </a>
+            <div class="header-results" id="headerResults">
+                <div class="result-squares" id="headerSquares"></div>
+            </div>
+            <div class="header-seed" id="gameSeed">Loading...</div>
+        </div>
+    </header>
+
+    <main class="container" id="app">
+        <div class="loading" id="loadingState">
+            <div class="loading-spinner"></div>
+            <p>Loading clips...</p>
+        </div>
+    </main>
+
+    <!-- Templates -->
+    <template id="homeTemplate">
+        <div class="home-screen">
+            <div class="home-logo">🎬</div>
+            <h1 class="home-title">Clipdle</h1>
+            <p class="home-subtitle">Which Twitch clip is ranked higher?</p>
+            <p class="home-description">Compare two clips side-by-side and guess which one has a higher community rating. Get all 8 right for a perfect score!</p>
+
+            <div class="home-buttons">
+                <button class="home-btn primary" id="playDailyBtn">
+                    📅 Play Today's Challenge
+                </button>
+                <button class="home-btn secondary" id="playRandomBtn">
+                    🎲 Random Game
+                </button>
+            </div>
+
+            <div class="home-custom-seed">
+                <label for="customSeedInput">Or enter a custom seed:</label>
+                <div class="seed-input-row">
+                    <input type="text" id="customSeedInput" placeholder="e.g., 12345">
+                    <button class="home-btn small" id="playSeedBtn">Play</button>
+                </div>
+            </div>
+
+            <div class="home-footer">
+                <p>Clips ranked by the <a href="https://flipper-clippers.arross.tv" target="_blank">Flipper Clippers</a> community</p>
+            </div>
+        </div>
+    </template>
+
+    <template id="comparisonTemplate">
+        <div class="comparison-container">
+            <div class="clips-grid">
+                <!-- Clip A (Left) -->
+                <div class="clip-panel" id="leftPanel" data-side="left">
+                    <div class="panel-header">
+                        <h2 class="clip-title" id="leftTitle">Loading...</h2>
+                        <p class="clip-author" id="leftAuthor"></p>
+                        <div class="revealed-elo" id="leftElo"></div>
+                    </div>
+                    <div class="clip-embed" id="leftEmbed"></div>
+                    <button class="choose-btn" id="leftChooseBtn">This One</button>
+                </div>
+
+                <div class="vs-divider">
+                    <span>VS</span>
+                </div>
+
+                <!-- Clip B (Right) -->
+                <div class="clip-panel" id="rightPanel" data-side="right">
+                    <div class="panel-header">
+                        <h2 class="clip-title" id="rightTitle">Loading...</h2>
+                        <p class="clip-author" id="rightAuthor"></p>
+                        <div class="revealed-elo" id="rightElo"></div>
+                    </div>
+                    <div class="clip-embed" id="rightEmbed"></div>
+                    <button class="choose-btn" id="rightChooseBtn">This One</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="gameOverTemplate">
+        <div class="game-over">
+            <h1 class="game-over-title" id="gameOverTitle">Game Complete!</h1>
+            <div class="game-over-score">
+                <span class="score-label">Score</span>
+                <span class="final-score" id="finalScore">0/8</span>
+            </div>
+            <div class="game-over-message" id="gameOverMessage"></div>
+
+            <div class="seed-display">
+                Seed: <span id="displaySeed"></span>
+            </div>
+
+            <div class="game-over-buttons">
+                <button class="game-over-btn primary" id="shareBtn">📋 Share Results</button>
+                <button class="game-over-btn secondary" id="playAgainBtn">🔄 Play Again</button>
+                <button class="game-over-btn secondary" id="newRandomBtn">🎲 New Random Game</button>
+                <button class="game-over-btn tertiary" id="homeBtn">🏠 Home</button>
+            </div>
+        </div>
+    </template>
+
+    <script src="/clipdle/game.js"></script>
+</body>
+</html>

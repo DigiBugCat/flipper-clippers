@@ -7,7 +7,10 @@ import clips from './handlers/clips';
 import compare from './handlers/compare';
 import leaderboard from './handlers/leaderboard';
 import saved from './handlers/saved';
+import thumbnails from './handlers/thumbnails';
+import clipdle from './handlers/clipdle';
 import { aggregateGlobalRankings } from './services/aggregation';
+import { syncRecentClips } from './services/clipSync';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -30,6 +33,7 @@ app.route('/api/clips', clips);
 app.route('/api/compare', compare);
 app.route('/api/leaderboard', leaderboard);
 app.route('/api/saved', saved);
+app.route('/api/thumbnails', thumbnails);
 
 // Health check
 app.get('/api/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString() }));
@@ -40,16 +44,42 @@ app.post('/api/aggregate', async (c) => {
   return c.json({ success: true, message: 'Global rankings aggregated' });
 });
 
+// Manual clip sync trigger (for testing/admin)
+app.post('/api/admin/sync-clips', async (c) => {
+  const result = await syncRecentClips(
+    c.env.DB,
+    c.env.TWITCH_CLIENT_ID,
+    c.env.TWITCH_CLIENT_SECRET
+  );
+  return c.json(result);
+});
+
 // Static files are handled by Wrangler's [assets] configuration
 // See wrangler.toml: [assets] directory = "public"
 
-// Export with scheduled handler for cron triggers
+// Clipdle API routes (for clipdle subdomain - same worker handles both)
+app.route('/api/clipdle', clipdle);
+
+// Export handlers for fetch and scheduled (cron) triggers
 export default {
   fetch: app.fetch,
+  scheduled: async (event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
+    console.log(`[CRON] Triggered at ${new Date().toISOString()}`);
 
-  // Cron trigger - runs every 5 minutes (see wrangler.toml)
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    console.log('Cron triggered: aggregating global rankings...');
-    ctx.waitUntil(aggregateGlobalRankings(env.DB));
+    try {
+      const result = await syncRecentClips(
+        env.DB,
+        env.TWITCH_CLIENT_ID,
+        env.TWITCH_CLIENT_SECRET
+      );
+
+      console.log(`[CRON] Sync complete: added=${result.added}, skipped=${result.skipped}`);
+
+      if (result.errors.length > 0) {
+        console.error(`[CRON] Errors: ${result.errors.join(', ')}`);
+      }
+    } catch (error) {
+      console.error(`[CRON] Failed:`, error);
+    }
   },
 };
