@@ -107,11 +107,14 @@ export async function getClipdleGame(
 ): Promise<ClipdleGame | null> {
   const clipCount = roundCount * 2; // Need 2 clips per round
 
-  // Get all eligible clips
+  // Get all eligible clips (must have ELO and at least MIN_MATCHES)
   const result = await db
     .prepare(
       `SELECT * FROM clips
-       WHERE is_active = 1 AND global_matches >= ?
+       WHERE is_active = 1
+         AND global_matches >= ?
+         AND global_elo IS NOT NULL
+         AND global_elo > 0
        ORDER BY id`
     )
     .bind(MIN_MATCHES)
