@@ -400,9 +400,7 @@
         profileNameEl.textContent = data.profile.displayName || "Anonymous";
       }
       if (profileStatsEl) {
-        const coverageText = data.profile.coveragePercent ? ` \u2022 ${data.profile.coveragePercent.toFixed(1)}% coverage` : "";
-        profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast${coverageText}`;
-        profileStatsEl.title = `${data.profile.uniquePairs || 0} unique pairs out of ${data.profile.totalPossiblePairs || 0} possible`;
+        profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast`;
       }
       if (data.compatibility) {
         const badge = document.getElementById("compatibility-badge");

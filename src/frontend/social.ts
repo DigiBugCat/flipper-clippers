@@ -94,11 +94,8 @@ async function loadProfile(userId: number): Promise<void> {
       profileNameEl.textContent = data.profile.displayName || 'Anonymous';
     }
     if (profileStatsEl) {
-      const coverageText = data.profile.coveragePercent
-        ? ` • ${data.profile.coveragePercent.toFixed(1)}% coverage`
-        : '';
-      profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast${coverageText}`;
-      profileStatsEl.title = `${data.profile.uniquePairs || 0} unique pairs out of ${data.profile.totalPossiblePairs || 0} possible`;
+      // Only show vote count on other users' profiles (coverage shown only on own profile)
+      profileStatsEl.textContent = `${formatNumber(data.profile.totalComparisons)} votes cast`;
     }
 
     // Show compatibility if available
