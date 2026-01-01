@@ -18,35 +18,32 @@ A Tinder-style clip ranking app for comparing and ranking Twitch clips. Users vo
 ## Architecture
 
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph Client["Browser"]
         BC["Browser Cache<br/>7d thumbnails"]
         Cookie["Signed Cookie<br/>10 pre-calc pairs"]
     end
 
-    subgraph Edge["Cloudflare Edge (300+ locations)"]
+    subgraph Edge["Cloudflare Edge (300+ PoPs)"]
         CDN["CDN Cache<br/>1-30min TTL"]
         Worker["Hono Worker"]
-
         subgraph KV["KV Store"]
             Sessions["SESSION_CACHE<br/>60s TTL"]
             Thumbs["THUMBNAIL_CACHE<br/>30d TTL"]
         end
     end
 
-    subgraph D1["Cloudflare D1"]
-        DB[(SQLite)]
-        Rollups["Rollup Tables<br/>Lazy aggregation"]
+    subgraph D1["Cloudflare D1 (SQLite)"]
+        Tables["Users, Clips,<br/>Ratings, Comparisons"]
+        Rollups["Rollup Tables<br/>5min stale threshold"]
     end
 
-    Client --> CDN
-    CDN --> Worker
-    Worker <--> Sessions
-    Worker <--> Thumbs
-    Worker <--> DB
-    Worker <--> Rollups
-    Worker <--> Twitch["Twitch API<br/>OAuth + Clips"]
-    Cookie -.->|"HMAC signed"| Worker
+    Twitch["Twitch API<br/>OAuth + Clips"]
+
+    Client --> CDN --> Worker
+    Worker <--> KV
+    Worker <--> D1
+    Worker <--> Twitch
 ```
 
 ### Serverless-First Design
