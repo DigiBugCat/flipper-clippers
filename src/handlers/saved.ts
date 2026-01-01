@@ -3,8 +3,6 @@ import { getCookie } from 'hono/cookie';
 import type { Context, Next } from 'hono';
 import type { Env, User } from '../types';
 import {
-  getSession,
-  getUserById,
   getClipById,
   getSavedClips,
   isClipSaved,
@@ -12,6 +10,7 @@ import {
   unsaveClip,
   reorderSavedClip,
 } from '../db/queries';
+import { getCachedSession } from './auth';
 
 // Extended context type with user variables
 type Variables = {
@@ -21,25 +20,21 @@ type Variables = {
 
 const saved = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// Middleware to require authentication
+// Middleware to require authentication with KV session caching
 async function requireAuth(c: Context<{ Bindings: Env; Variables: Variables }>, next: Next) {
   const sessionId = getCookie(c, 'session');
   if (!sessionId) {
     return c.json({ error: 'Authentication required' }, 401);
   }
 
-  const session = await getSession(c.env.DB, sessionId);
-  if (!session) {
+  // Use KV-cached session lookup
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
     return c.json({ error: 'Invalid session' }, 401);
   }
 
-  const user = await getUserById(c.env.DB, session.user_id);
-  if (!user) {
-    return c.json({ error: 'User not found' }, 401);
-  }
-
-  c.set('user', user);
-  c.set('userId', user.id);
+  c.set('user', cached.user);
+  c.set('userId', cached.user.id);
   await next();
 }
 
@@ -48,6 +43,9 @@ saved.get('/', requireAuth, async (c) => {
   const userId = c.get('userId');
 
   const clips = await getSavedClips(c.env.DB, userId);
+
+  // Browser-only cache (private because user-specific data)
+  c.header('Cache-Control', 'private, max-age=60');
 
   return c.json({
     clips: clips.map((clip) => ({
@@ -110,6 +108,7 @@ saved.post('/:clipId', requireAuth, async (c) => {
 
   await saveClip(c.env.DB, userId, clipId);
 
+  console.log(`[ACTIVITY] user=${userId} action=save clipId=${clipId}`);
   return c.json({ success: true });
 });
 
@@ -124,6 +123,7 @@ saved.delete('/:clipId', requireAuth, async (c) => {
 
   await unsaveClip(c.env.DB, userId, clipId);
 
+  console.log(`[ACTIVITY] user=${userId} action=unsave clipId=${clipId}`);
   return c.json({ success: true });
 });
 

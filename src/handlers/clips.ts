@@ -10,10 +10,9 @@ import {
   getUserClipsSortedByElo,
   upsertUserClipRating,
   getUserClipRating,
-  getSession,
-  getUserById,
 } from '../db/queries';
 import { validateAndFetchClip, extractClipSlug } from '../services/twitch';
+import { getCachedSession } from './auth';
 
 // Extended context type with user variables
 type Variables = {
@@ -23,8 +22,7 @@ type Variables = {
 
 const clips = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// In-memory store for binary search sessions (in production, use KV or D1)
-// Map of `${userId}-${clipId}` -> session state
+// Ranking session type (persisted to KV)
 export type RankingSession = {
   clipId: number;
   sortedClips: { id: number; elo: number }[];
@@ -32,29 +30,60 @@ export type RankingSession = {
   high: number;
   step: number;
   totalSteps: number;
+  isRerank?: boolean;
 };
 
-export const rankingSessions = new Map<string, RankingSession>();
+// Ranking session TTL: 1 hour
+const RANKING_SESSION_TTL = 60 * 60;
 
-// Auth middleware
+/**
+ * Get ranking session from KV
+ */
+export async function getRankingSession(
+  kv: KVNamespace,
+  sessionKey: string
+): Promise<RankingSession | null> {
+  return await kv.get<RankingSession>(`ranking:${sessionKey}`, 'json');
+}
+
+/**
+ * Save ranking session to KV
+ */
+export async function setRankingSession(
+  kv: KVNamespace,
+  sessionKey: string,
+  session: RankingSession
+): Promise<void> {
+  await kv.put(`ranking:${sessionKey}`, JSON.stringify(session), {
+    expirationTtl: RANKING_SESSION_TTL,
+  });
+}
+
+/**
+ * Delete ranking session from KV
+ */
+export async function deleteRankingSession(
+  kv: KVNamespace,
+  sessionKey: string
+): Promise<void> {
+  await kv.delete(`ranking:${sessionKey}`);
+}
+
+// Auth middleware with KV session caching
 async function requireAuth(c: Context<{ Bindings: Env; Variables: Variables }>, next: Next) {
   const sessionId = getCookie(c, 'session');
   if (!sessionId) {
     return c.json({ error: 'Authentication required' }, 401);
   }
 
-  const session = await getSession(c.env.DB, sessionId);
-  if (!session) {
+  // Use KV-cached session lookup
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
     return c.json({ error: 'Invalid session' }, 401);
   }
 
-  const user = await getUserById(c.env.DB, session.user_id);
-  if (!user) {
-    return c.json({ error: 'User not found' }, 401);
-  }
-
-  c.set('user', user);
-  c.set('userId', user.id);
+  c.set('user', cached.user);
+  c.set('userId', cached.user.id);
   await next();
 }
 
@@ -62,6 +91,8 @@ async function requireAuth(c: Context<{ Bindings: Env; Variables: Variables }>, 
 clips.get('/', async (c) => {
   const allClips = await getAllClips(c.env.DB);
 
+  // CF CDN cache for 5 minutes
+  c.header('Cache-Control', 'public, s-maxage=300');
   return c.json({
     clips: allClips.map((clip) => ({
       id: clip.id,
@@ -88,6 +119,8 @@ clips.get('/:id', async (c) => {
     return c.json({ error: 'Clip not found' }, 404);
   }
 
+  // CF CDN cache for 30 minutes (clip metadata rarely changes)
+  c.header('Cache-Control', 'public, s-maxage=1800');
   return c.json({
     id: clip.id,
     twitchSlug: clip.twitch_slug,
@@ -109,6 +142,8 @@ clips.get('/stats/count', async (c) => {
     count: number;
   }>();
 
+  // CF CDN cache for 5 minutes
+  c.header('Cache-Control', 'public, s-maxage=300');
   return c.json({ count: result?.count ?? 0 });
 });
 
@@ -149,6 +184,7 @@ clips.post('/submit', requireAuth, async (c) => {
       twitchClip.creator_name,
       userId
     );
+    console.log(`[ACTIVITY] user=${userId} action=submit clipId=${clip.id} slug=${slug}`);
   }
 
   // Give a small global ELO bump for being submitted (someone thought it was worth sharing)
@@ -212,9 +248,9 @@ clips.post('/submit', requireAuth, async (c) => {
   const totalSteps = Math.ceil(Math.log2(userClips.length));
   const sessionKey = `${userId}-${clip.id}`;
 
-  rankingSessions.set(sessionKey, {
+  await setRankingSession(c.env.SESSION_CACHE, sessionKey, {
     clipId: clip.id,
-    sortedClips: userClips.map((c) => ({ id: c.id, elo: c.user_elo })),
+    sortedClips: userClips.map((uc) => ({ id: uc.id, elo: uc.user_elo })),
     low: 0,
     high: userClips.length - 1,
     step: 1,
@@ -268,7 +304,7 @@ clips.get('/rank-session/:clipId', requireAuth, async (c) => {
   }
 
   const sessionKey = `${userId}-${clipId}`;
-  const session = rankingSessions.get(sessionKey);
+  const session = await getRankingSession(c.env.SESSION_CACHE, sessionKey);
 
   if (!session) {
     return c.json({ error: 'No active ranking session' }, 404);
@@ -317,7 +353,7 @@ clips.post('/rank-session/:clipId/vote', requireAuth, async (c) => {
   }
 
   const sessionKey = `${userId}-${clipId}`;
-  const session = rankingSessions.get(sessionKey);
+  const session = await getRankingSession(c.env.SESSION_CACHE, sessionKey);
 
   if (!session) {
     return c.json({ error: 'No active ranking session' }, 404);
@@ -374,7 +410,7 @@ clips.post('/rank-session/:clipId/vote', requireAuth, async (c) => {
     );
 
     // Clean up session
-    rankingSessions.delete(sessionKey);
+    await deleteRankingSession(c.env.SESSION_CACHE, sessionKey);
 
     return c.json({
       done: true,
@@ -383,6 +419,9 @@ clips.post('/rank-session/:clipId/vote', requireAuth, async (c) => {
       message: `Clip ranked at position #${finalPosition + 1}!`,
     });
   }
+
+  // Save updated session state
+  await setRankingSession(c.env.SESSION_CACHE, sessionKey, session);
 
   // Continue with next comparison
   const newMid = Math.floor((session.low + session.high) / 2);
@@ -415,7 +454,7 @@ clips.delete('/rank-session/:clipId', requireAuth, async (c) => {
   }
 
   const sessionKey = `${userId}-${clipId}`;
-  rankingSessions.delete(sessionKey);
+  await deleteRankingSession(c.env.SESSION_CACHE, sessionKey);
 
   return c.json({ success: true });
 });

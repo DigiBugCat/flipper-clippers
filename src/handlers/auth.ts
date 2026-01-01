@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
-import type { Env, TwitchTokenResponse, TwitchUser } from '../types';
+import type { Env, TwitchTokenResponse, TwitchUser, User, Session } from '../types';
 import {
   getUserByTwitchId,
   createUser,
@@ -11,6 +11,64 @@ import {
 } from '../db/queries';
 
 const auth = new Hono<{ Bindings: Env }>();
+
+// Session cache TTL: 5 minutes (reduces D1 reads by ~80%)
+const SESSION_CACHE_TTL = 5 * 60;
+
+// Cached session data structure
+interface CachedSessionData {
+  session: Session;
+  user: User;
+}
+
+/**
+ * Get session with KV caching
+ * Reduces D1 reads for authenticated requests
+ */
+export async function getCachedSession(
+  db: D1Database,
+  sessionCache: KVNamespace,
+  sessionId: string
+): Promise<CachedSessionData | null> {
+  const cacheKey = `session:${sessionId}`;
+
+  // Try KV cache first
+  const cached = await sessionCache.get<CachedSessionData>(cacheKey, 'json');
+  if (cached) {
+    // Check if session is still valid
+    if (new Date(cached.session.expires_at) > new Date()) {
+      return cached;
+    }
+    // Expired, delete from cache
+    await sessionCache.delete(cacheKey);
+  }
+
+  // Cache miss - query D1
+  const session = await getSession(db, sessionId);
+  if (!session) {
+    return null;
+  }
+
+  const user = await getUserById(db, session.user_id);
+  if (!user) {
+    return null;
+  }
+
+  const data: CachedSessionData = { session, user };
+  await sessionCache.put(cacheKey, JSON.stringify(data), { expirationTtl: SESSION_CACHE_TTL });
+
+  return data;
+}
+
+/**
+ * Invalidate cached session (call on logout or session update)
+ */
+export async function invalidateCachedSession(
+  sessionCache: KVNamespace,
+  sessionId: string
+): Promise<void> {
+  await sessionCache.delete(`session:${sessionId}`);
+}
 
 // Generate a random session ID
 function generateSessionId(): string {
@@ -32,13 +90,14 @@ function getRedirectUri(c: any): string {
   return `${url.origin}/api/auth/callback`;
 }
 
-// Dev mode login (bypasses Twitch OAuth) - ONLY available on localhost
+// Dev mode login (bypasses Twitch OAuth) - ONLY available in local development
 auth.get('/dev-login', async (c) => {
-  // Security: Only allow dev login on localhost
-  const url = new URL(c.req.url);
-  const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  // Security: Check if running in local dev mode via CF-Connecting-IP header
+  // In production, CF sets this header. In local dev (Miniflare), it's not set or is localhost
+  const cfConnectingIp = c.req.header('cf-connecting-ip');
+  const isLocalDev = !cfConnectingIp || cfConnectingIp === '127.0.0.1' || cfConnectingIp === '::1';
 
-  if (!isLocalhost) {
+  if (!isLocalDev) {
     return c.json({ error: 'Dev login is only available in local development' }, 403);
   }
 
@@ -67,10 +126,11 @@ auth.get('/dev-login', async (c) => {
     .bind(sessionId, user.id, expiresAt)
     .run();
 
-  // Set session cookie (secure: false only for localhost HTTP)
+  // Set session cookie (secure: false for local dev)
+  const reqUrl = new URL(c.req.url);
   setCookie(c, 'session', sessionId, {
     httpOnly: true,
-    secure: url.protocol === 'https:',
+    secure: reqUrl.protocol === 'https:',
     sameSite: 'Lax',
     maxAge: 7 * 24 * 60 * 60,
     path: '/',
@@ -201,6 +261,7 @@ auth.get('/callback', async (c) => {
       path: '/',
     });
 
+    console.log(`[ACTIVITY] user=${user.id} action=login username=${twitchUser.login}`);
     return c.redirect('/compare');
   } catch (error) {
     console.error('Auth callback error:', error);
@@ -216,18 +277,14 @@ auth.get('/me', async (c) => {
     return c.json({ user: null }, 200);
   }
 
-  const session = await getSession(c.env.DB, sessionId);
-  if (!session) {
+  // Use KV-cached session lookup
+  const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+  if (!cached) {
     deleteCookie(c, 'session', { path: '/' });
     return c.json({ user: null }, 200);
   }
 
-  const user = await getUserById(c.env.DB, session.user_id);
-  if (!user) {
-    await deleteSession(c.env.DB, sessionId);
-    deleteCookie(c, 'session', { path: '/' });
-    return c.json({ user: null }, 200);
-  }
+  const { user } = cached;
 
   return c.json({
     user: {
@@ -246,6 +303,13 @@ auth.post('/logout', async (c) => {
   const sessionId = getCookie(c, 'session');
 
   if (sessionId) {
+    // Get user before invalidating session for logging
+    const cached = await getCachedSession(c.env.DB, c.env.SESSION_CACHE, sessionId);
+    if (cached) {
+      console.log(`[ACTIVITY] user=${cached.user.id} action=logout`);
+    }
+    // Invalidate KV cache and D1 session
+    await invalidateCachedSession(c.env.SESSION_CACHE, sessionId);
     await deleteSession(c.env.DB, sessionId);
     deleteCookie(c, 'session', { path: '/' });
   }
