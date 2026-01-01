@@ -201,7 +201,7 @@ clips.post('/submit', requireAuth, async (c) => {
       userId,
       clip.id,
       1500, // Middle ELO
-      0, // matches
+      1, // matches - count as ranked so it shows in UI
       0, // wins
       0, // losses
       0, // ties

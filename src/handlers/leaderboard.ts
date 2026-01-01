@@ -394,9 +394,9 @@ leaderboard.post('/add/:clipId', async (c) => {
     return c.json({ error: 'Clip not found' }, 404);
   }
 
-  // Check if user already has this clip in their rankings
+  // Check if user already has this clip in their rankings (only if actually ranked, not just voted on)
   const existingRating = await getUserClipRating(c.env.DB, userId, clipId);
-  if (existingRating) {
+  if (existingRating && existingRating.matches_played > 0) {
     return c.json({
       success: true,
       alreadyRanked: true,
@@ -414,7 +414,7 @@ leaderboard.post('/add/:clipId', async (c) => {
       userId,
       clipId,
       1500, // Middle ELO
-      0, // matches
+      1, // matches - count as ranked so it shows in UI
       0, // wins
       0, // losses
       0, // ties
