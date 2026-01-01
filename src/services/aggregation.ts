@@ -1,96 +1,229 @@
 import type { Clip } from '../types';
-import { getAllClips, updateClipGlobalRating } from '../db/queries';
 
-interface UserRatingRow {
+// Rollup staleness threshold (5 minutes)
+const ROLLUP_STALE_MINUTES = 5;
+
+interface AggregatedClipRow {
   clip_id: number;
-  elo_rating: number;
-  matches_played: number;
-  wins: number;
-  losses: number;
-  ties: number;
-  super_liked: number;
-  rating_deviation: number;
-  user_comparisons: number;
+  weighted_elo: number | null;
+  weighted_deviation: number | null;
+  total_matches: number;
+  total_wins: number;
+  total_losses: number;
+  total_ties: number;
+  total_super_likes: number;
+}
+
+interface RollupRow {
+  clip_id: number;
+  weighted_elo: number;
+  weighted_deviation: number;
+  weighted_elo_sum: number;
+  weighted_deviation_sum: number;
+  weight_sum: number;
+  total_matches: number;
+  total_wins: number;
+  total_losses: number;
+  total_ties: number;
+  total_super_likes: number;
+  last_updated_at: string;
 }
 
 /**
  * Aggregate rankings from all users into global rankings
- * Uses weighted average based on user comparison count
+ * Uses rollup table with lazy update (recalculates if stale > 5 min)
  */
 export async function aggregateGlobalRankings(db: D1Database): Promise<void> {
-  const clips = await getAllClips(db);
+  console.log('[AGGREGATION] Starting global rankings aggregation...');
+  const startTime = Date.now();
 
-  for (const clip of clips) {
-    // Get all user ratings for this clip with user's total comparison count
-    const result = await db
+  // Check rollup freshness
+  const oldestRollup = await db
+    .prepare('SELECT MIN(last_updated_at) as oldest FROM clip_rating_rollups')
+    .first<{ oldest: string | null }>();
+
+  const rollupCount = await db
+    .prepare('SELECT COUNT(*) as count FROM clip_rating_rollups')
+    .first<{ count: number }>();
+
+  const hasRollups = (rollupCount?.count ?? 0) > 0;
+  let isStale = true;
+
+  if (hasRollups && oldestRollup?.oldest) {
+    const oldestTime = new Date(oldestRollup.oldest).getTime();
+    const now = Date.now();
+    const ageMinutes = (now - oldestTime) / 1000 / 60;
+    isStale = ageMinutes > ROLLUP_STALE_MINUTES;
+    console.log(`[AGGREGATION] Rollup age: ${ageMinutes.toFixed(1)} min, stale=${isStale}`);
+  } else {
+    console.log('[AGGREGATION] No rollups found, will calculate');
+  }
+
+  if (!isStale && hasRollups) {
+    // Fast path: rollup is fresh, clips table already in sync - skip entirely
+    console.log(`[AGGREGATION] Rollup fresh, skipping sync (${Date.now() - startTime}ms)`);
+    return;
+  }
+
+  // Recalculate from ratings (slow path - ~962 rows)
+  const aggregatedResults = await recalculateAggregates(db, startTime);
+
+  // Update clips table from aggregated data
+  const updateStatements = aggregatedResults.map((row) =>
+    db
       .prepare(
-        `SELECT
-           ucr.clip_id,
-           ucr.elo_rating,
-           ucr.matches_played,
-           ucr.wins,
-           ucr.losses,
-           ucr.ties,
-           ucr.super_liked,
-           ucr.rating_deviation,
-           u.total_comparisons as user_comparisons
-         FROM user_clip_ratings ucr
-         JOIN users u ON ucr.user_id = u.id
-         WHERE ucr.clip_id = ?`
+        `UPDATE clips SET
+         global_elo = ?, global_matches = ?, global_wins = ?, global_losses = ?,
+         global_ties = ?, global_super_likes = ?, rating_deviation = ?, last_rated_at = datetime('now')
+         WHERE id = ?`
       )
-      .bind(clip.id)
-      .all<UserRatingRow>();
+      .bind(
+        row.weighted_elo,
+        row.total_matches,
+        row.total_wins,
+        row.total_losses,
+        row.total_ties,
+        row.total_super_likes,
+        row.weighted_deviation ?? 350,
+        row.clip_id
+      )
+  );
 
-    const userRatings = result.results;
+  if (updateStatements.length > 0) {
+    await db.batch(updateStatements);
+  }
 
-    if (userRatings.length === 0) {
-      continue;
+  console.log(`[AGGREGATION] Batch updated ${updateStatements.length} clips in ${Date.now() - startTime}ms total`);
+}
+
+/**
+ * Recalculate aggregates from user_clip_ratings and update rollup table
+ */
+async function recalculateAggregates(db: D1Database, startTime: number): Promise<AggregatedClipRow[]> {
+  // Query 1: Get all active clip IDs
+  const clipsResult = await db
+    .prepare('SELECT id FROM clips WHERE is_active = 1')
+    .all<{ id: number }>();
+  const clipIds = new Set(clipsResult.results.map((r) => r.id));
+  console.log(`[AGGREGATION] Query 1: ${clipIds.size} clips, rows_read=${clipsResult.meta?.rows_read}`);
+
+  // Query 2: Get all user clip ratings
+  const ratingsResult = await db
+    .prepare('SELECT user_id, clip_id, elo_rating, rating_deviation, matches_played, wins, losses, ties, super_liked FROM user_clip_ratings')
+    .all<{
+      user_id: number;
+      clip_id: number;
+      elo_rating: number;
+      rating_deviation: number;
+      matches_played: number;
+      wins: number;
+      losses: number;
+      ties: number;
+      super_liked: number;
+    }>();
+  console.log(`[AGGREGATION] Query 2: ${ratingsResult.results.length} ratings, rows_read=${ratingsResult.meta?.rows_read}`);
+
+  // Query 3: Get all users with their comparison counts
+  const usersResult = await db
+    .prepare('SELECT id, total_comparisons FROM users')
+    .all<{ id: number; total_comparisons: number }>();
+  const usersMap = new Map(usersResult.results.map((u) => [u.id, Math.min(u.total_comparisons, 100)]));
+  console.log(`[AGGREGATION] Query 3: ${usersResult.results.length} users, rows_read=${usersResult.meta?.rows_read}`);
+
+  // In-memory aggregation
+  const clipAggregates = new Map<number, {
+    weightedEloSum: number;
+    weightedDeviationSum: number;
+    weightSum: number;
+    totalMatches: number;
+    totalWins: number;
+    totalLosses: number;
+    totalTies: number;
+    totalSuperLikes: number;
+  }>();
+
+  for (const rating of ratingsResult.results) {
+    if (!clipIds.has(rating.clip_id)) continue;
+
+    const userWeight = usersMap.get(rating.user_id) ?? 0;
+    if (userWeight === 0) continue;
+
+    let agg = clipAggregates.get(rating.clip_id);
+    if (!agg) {
+      agg = {
+        weightedEloSum: 0,
+        weightedDeviationSum: 0,
+        weightSum: 0,
+        totalMatches: 0,
+        totalWins: 0,
+        totalLosses: 0,
+        totalTies: 0,
+        totalSuperLikes: 0,
+      };
+      clipAggregates.set(rating.clip_id, agg);
     }
 
-    // Calculate weighted average rating
-    let totalWeight = 0;
-    let weightedRating = 0;
-    let totalMatches = 0;
-    let totalWins = 0;
-    let totalLosses = 0;
-    let totalTies = 0;
-    let totalSuperLikes = 0;
-    let weightedDeviation = 0;
+    agg.weightedEloSum += rating.elo_rating * userWeight;
+    agg.weightedDeviationSum += rating.rating_deviation * userWeight;
+    agg.weightSum += userWeight;
+    agg.totalMatches += rating.matches_played;
+    agg.totalWins += rating.wins;
+    agg.totalLosses += rating.losses;
+    agg.totalTies += rating.ties;
+    agg.totalSuperLikes += rating.super_liked;
+  }
 
-    for (const rating of userRatings) {
-      // Weight by number of comparisons (more active users have more influence)
-      // Cap influence at 100 comparisons to prevent one super-active user from dominating
-      const weight = Math.min(rating.user_comparisons, 100);
-
-      weightedRating += rating.elo_rating * weight;
-      weightedDeviation += rating.rating_deviation * weight;
-      totalWeight += weight;
-
-      // Sum up stats
-      totalMatches += rating.matches_played;
-      totalWins += rating.wins;
-      totalLosses += rating.losses;
-      totalTies += rating.ties;
-      totalSuperLikes += rating.super_liked;
-    }
-
-    if (totalWeight > 0) {
-      const globalElo = weightedRating / totalWeight;
-      const globalDeviation = weightedDeviation / totalWeight;
-
-      await updateClipGlobalRating(
-        db,
-        clip.id,
-        globalElo,
-        totalMatches,
-        totalWins,
-        totalLosses,
-        totalTies,
-        totalSuperLikes,
-        globalDeviation
-      );
+  // Build aggregated results
+  const aggregatedResults: AggregatedClipRow[] = [];
+  for (const [clipId, agg] of clipAggregates) {
+    if (agg.weightSum > 0) {
+      aggregatedResults.push({
+        clip_id: clipId,
+        weighted_elo: agg.weightedEloSum / agg.weightSum,
+        weighted_deviation: agg.weightedDeviationSum / agg.weightSum,
+        total_matches: agg.totalMatches,
+        total_wins: agg.totalWins,
+        total_losses: agg.totalLosses,
+        total_ties: agg.totalTies,
+        total_super_likes: agg.totalSuperLikes,
+      });
     }
   }
+
+  const totalRowsRead = (clipsResult.meta?.rows_read ?? 0) + (ratingsResult.meta?.rows_read ?? 0) + (usersResult.meta?.rows_read ?? 0);
+  console.log(`[AGGREGATION] Recalculated ${aggregatedResults.length} clips, total_rows_read=${totalRowsRead} in ${Date.now() - startTime}ms`);
+
+  // Update rollup table with sum columns for incremental updates
+  const rollupStatements = aggregatedResults.map((row) => {
+    const agg = clipAggregates.get(row.clip_id)!;
+    return db
+      .prepare(
+        `INSERT OR REPLACE INTO clip_rating_rollups
+         (clip_id, weighted_elo, weighted_deviation, weighted_elo_sum, weighted_deviation_sum, weight_sum,
+          total_matches, total_wins, total_losses, total_ties, total_super_likes, last_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      )
+      .bind(
+        row.clip_id,
+        row.weighted_elo,
+        row.weighted_deviation,
+        agg.weightedEloSum,
+        agg.weightedDeviationSum,
+        agg.weightSum,
+        row.total_matches,
+        row.total_wins,
+        row.total_losses,
+        row.total_ties,
+        row.total_super_likes
+      );
+  });
+
+  if (rollupStatements.length > 0) {
+    await db.batch(rollupStatements);
+    console.log(`[AGGREGATION] Updated ${rollupStatements.length} rollups`);
+  }
+
+  return aggregatedResults;
 }
 
 /**
@@ -205,4 +338,155 @@ export async function compareUserRankings(
   }
 
   return { agreementScore, sharedClips, topDisagreements };
+}
+
+/**
+ * Incrementally update rollup for a single clip after a vote
+ * Called from vote handler to keep rollup fresh without full recalculation
+ */
+export async function updateRollupForVote(
+  db: D1Database,
+  clipId: number,
+  oldElo: number,
+  newElo: number,
+  oldDeviation: number,
+  newDeviation: number,
+  userWeight: number,
+  isNewRating: boolean,
+  statsDelta: { matches: number; wins: number; losses: number; ties: number; superLike: number }
+): Promise<void> {
+  console.log(`[ROLLUP] Updating clip=${clipId} isNew=${isNewRating} weight=${userWeight}`);
+
+  // Read current rollup for this clip
+  const rollup = await db
+    .prepare('SELECT * FROM clip_rating_rollups WHERE clip_id = ?')
+    .bind(clipId)
+    .first<RollupRow>();
+
+  console.log(`[ROLLUP] clip=${clipId} hasRollup=${!!rollup}`);
+
+  if (!rollup) {
+    // No rollup exists yet - create initial entry
+    const weightedEloSum = newElo * userWeight;
+    const weightedDeviationSum = newDeviation * userWeight;
+    await db
+      .prepare(
+        `INSERT INTO clip_rating_rollups
+         (clip_id, weighted_elo, weighted_deviation, weighted_elo_sum, weighted_deviation_sum, weight_sum,
+          total_matches, total_wins, total_losses, total_ties, total_super_likes, last_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      )
+      .bind(
+        clipId,
+        newElo,
+        newDeviation,
+        weightedEloSum,
+        weightedDeviationSum,
+        userWeight,
+        statsDelta.matches,
+        statsDelta.wins,
+        statsDelta.losses,
+        statsDelta.ties,
+        statsDelta.superLike
+      )
+      .run();
+
+    // Also update clips table to keep in sync
+    await db
+      .prepare(
+        `UPDATE clips SET
+         global_elo = ?, global_matches = ?, global_wins = ?, global_losses = ?,
+         global_ties = ?, global_super_likes = ?, rating_deviation = ?, last_rated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .bind(
+        newElo,
+        statsDelta.matches,
+        statsDelta.wins,
+        statsDelta.losses,
+        statsDelta.ties,
+        statsDelta.superLike,
+        newDeviation,
+        clipId
+      )
+      .run();
+
+    console.log(`[ROLLUP] Created new rollup for clip=${clipId}`);
+    return;
+  }
+
+  // Calculate delta for weighted sums
+  let newEloSum = rollup.weighted_elo_sum ?? 0;
+  let newDeviationSum = rollup.weighted_deviation_sum ?? 0;
+  let newWeightSum = rollup.weight_sum ?? 0;
+
+  if (isNewRating) {
+    // New rating: just add contribution
+    newEloSum += newElo * userWeight;
+    newDeviationSum += newDeviation * userWeight;
+    newWeightSum += userWeight;
+  } else {
+    // Updated rating: subtract old, add new
+    newEloSum = newEloSum - oldElo * userWeight + newElo * userWeight;
+    newDeviationSum = newDeviationSum - oldDeviation * userWeight + newDeviation * userWeight;
+    // Weight sum unchanged for updates
+  }
+
+  // Calculate new averages
+  const newWeightedElo = newWeightSum > 0 ? newEloSum / newWeightSum : newElo;
+  const newWeightedDeviation = newWeightSum > 0 ? newDeviationSum / newWeightSum : newDeviation;
+
+  // Update rollup
+  await db
+    .prepare(
+      `UPDATE clip_rating_rollups SET
+       weighted_elo = ?, weighted_deviation = ?,
+       weighted_elo_sum = ?, weighted_deviation_sum = ?, weight_sum = ?,
+       total_matches = total_matches + ?, total_wins = total_wins + ?,
+       total_losses = total_losses + ?, total_ties = total_ties + ?,
+       total_super_likes = total_super_likes + ?, last_updated_at = datetime('now')
+       WHERE clip_id = ?`
+    )
+    .bind(
+      newWeightedElo,
+      newWeightedDeviation,
+      newEloSum,
+      newDeviationSum,
+      newWeightSum,
+      statsDelta.matches,
+      statsDelta.wins,
+      statsDelta.losses,
+      statsDelta.ties,
+      statsDelta.superLike,
+      clipId
+    )
+    .run();
+
+  // Also update clips table to keep in sync
+  const newMatches = rollup.total_matches + statsDelta.matches;
+  const newWins = rollup.total_wins + statsDelta.wins;
+  const newLosses = rollup.total_losses + statsDelta.losses;
+  const newTies = rollup.total_ties + statsDelta.ties;
+  const newSuperLikes = rollup.total_super_likes + statsDelta.superLike;
+
+  await db
+    .prepare(
+      `UPDATE clips SET
+       global_elo = ?, global_matches = ?, global_wins = ?, global_losses = ?,
+       global_ties = ?, global_super_likes = ?, rating_deviation = ?, last_rated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .bind(
+      newWeightedElo,
+      newMatches,
+      newWins,
+      newLosses,
+      newTies,
+      newSuperLikes,
+      newWeightedDeviation,
+      clipId
+    )
+    .run();
+
+  console.log(`[ROLLUP] Updated clip=${clipId} newElo=${newWeightedElo.toFixed(1)}`);
 }
