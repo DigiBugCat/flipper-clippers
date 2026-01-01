@@ -369,47 +369,47 @@ export async function updateRollupForVote(
     // No rollup exists yet - create initial entry
     const weightedEloSum = newElo * userWeight;
     const weightedDeviationSum = newDeviation * userWeight;
-    await db
-      .prepare(
-        `INSERT INTO clip_rating_rollups
-         (clip_id, weighted_elo, weighted_deviation, weighted_elo_sum, weighted_deviation_sum, weight_sum,
-          total_matches, total_wins, total_losses, total_ties, total_super_likes, last_updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
-      )
-      .bind(
-        clipId,
-        newElo,
-        newDeviation,
-        weightedEloSum,
-        weightedDeviationSum,
-        userWeight,
-        statsDelta.matches,
-        statsDelta.wins,
-        statsDelta.losses,
-        statsDelta.ties,
-        statsDelta.superLike
-      )
-      .run();
 
-    // Also update clips table to keep in sync
-    await db
-      .prepare(
-        `UPDATE clips SET
-         global_elo = ?, global_matches = ?, global_wins = ?, global_losses = ?,
-         global_ties = ?, global_super_likes = ?, rating_deviation = ?, last_rated_at = datetime('now')
-         WHERE id = ?`
-      )
-      .bind(
-        newElo,
-        statsDelta.matches,
-        statsDelta.wins,
-        statsDelta.losses,
-        statsDelta.ties,
-        statsDelta.superLike,
-        newDeviation,
-        clipId
-      )
-      .run();
+    // Atomic batch update: rollup + clips together
+    await db.batch([
+      db
+        .prepare(
+          `INSERT INTO clip_rating_rollups
+           (clip_id, weighted_elo, weighted_deviation, weighted_elo_sum, weighted_deviation_sum, weight_sum,
+            total_matches, total_wins, total_losses, total_ties, total_super_likes, last_updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+        )
+        .bind(
+          clipId,
+          newElo,
+          newDeviation,
+          weightedEloSum,
+          weightedDeviationSum,
+          userWeight,
+          statsDelta.matches,
+          statsDelta.wins,
+          statsDelta.losses,
+          statsDelta.ties,
+          statsDelta.superLike
+        ),
+      db
+        .prepare(
+          `UPDATE clips SET
+           global_elo = ?, global_matches = ?, global_wins = ?, global_losses = ?,
+           global_ties = ?, global_super_likes = ?, rating_deviation = ?, last_rated_at = datetime('now')
+           WHERE id = ?`
+        )
+        .bind(
+          newElo,
+          statsDelta.matches,
+          statsDelta.wins,
+          statsDelta.losses,
+          statsDelta.ties,
+          statsDelta.superLike,
+          newDeviation,
+          clipId
+        ),
+    ]);
 
     console.log(`[ROLLUP] Created new rollup for clip=${clipId}`);
     return;
@@ -436,57 +436,56 @@ export async function updateRollupForVote(
   const newWeightedElo = newWeightSum > 0 ? newEloSum / newWeightSum : newElo;
   const newWeightedDeviation = newWeightSum > 0 ? newDeviationSum / newWeightSum : newDeviation;
 
-  // Update rollup
-  await db
-    .prepare(
-      `UPDATE clip_rating_rollups SET
-       weighted_elo = ?, weighted_deviation = ?,
-       weighted_elo_sum = ?, weighted_deviation_sum = ?, weight_sum = ?,
-       total_matches = total_matches + ?, total_wins = total_wins + ?,
-       total_losses = total_losses + ?, total_ties = total_ties + ?,
-       total_super_likes = total_super_likes + ?, last_updated_at = datetime('now')
-       WHERE clip_id = ?`
-    )
-    .bind(
-      newWeightedElo,
-      newWeightedDeviation,
-      newEloSum,
-      newDeviationSum,
-      newWeightSum,
-      statsDelta.matches,
-      statsDelta.wins,
-      statsDelta.losses,
-      statsDelta.ties,
-      statsDelta.superLike,
-      clipId
-    )
-    .run();
-
-  // Also update clips table to keep in sync
+  // Calculate new totals for clips table
   const newMatches = rollup.total_matches + statsDelta.matches;
   const newWins = rollup.total_wins + statsDelta.wins;
   const newLosses = rollup.total_losses + statsDelta.losses;
   const newTies = rollup.total_ties + statsDelta.ties;
   const newSuperLikes = rollup.total_super_likes + statsDelta.superLike;
 
-  await db
-    .prepare(
-      `UPDATE clips SET
-       global_elo = ?, global_matches = ?, global_wins = ?, global_losses = ?,
-       global_ties = ?, global_super_likes = ?, rating_deviation = ?, last_rated_at = datetime('now')
-       WHERE id = ?`
-    )
-    .bind(
-      newWeightedElo,
-      newMatches,
-      newWins,
-      newLosses,
-      newTies,
-      newSuperLikes,
-      newWeightedDeviation,
-      clipId
-    )
-    .run();
+  // Atomic batch update: rollup + clips together
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE clip_rating_rollups SET
+         weighted_elo = ?, weighted_deviation = ?,
+         weighted_elo_sum = ?, weighted_deviation_sum = ?, weight_sum = ?,
+         total_matches = total_matches + ?, total_wins = total_wins + ?,
+         total_losses = total_losses + ?, total_ties = total_ties + ?,
+         total_super_likes = total_super_likes + ?, last_updated_at = datetime('now')
+         WHERE clip_id = ?`
+      )
+      .bind(
+        newWeightedElo,
+        newWeightedDeviation,
+        newEloSum,
+        newDeviationSum,
+        newWeightSum,
+        statsDelta.matches,
+        statsDelta.wins,
+        statsDelta.losses,
+        statsDelta.ties,
+        statsDelta.superLike,
+        clipId
+      ),
+    db
+      .prepare(
+        `UPDATE clips SET
+         global_elo = ?, global_matches = ?, global_wins = ?, global_losses = ?,
+         global_ties = ?, global_super_likes = ?, rating_deviation = ?, last_rated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .bind(
+        newWeightedElo,
+        newMatches,
+        newWins,
+        newLosses,
+        newTies,
+        newSuperLikes,
+        newWeightedDeviation,
+        clipId
+      ),
+  ]);
 
   console.log(`[ROLLUP] Updated clip=${clipId} newElo=${newWeightedElo.toFixed(1)}`);
 }
