@@ -67,6 +67,92 @@ Optimized for edge computing with multi-layer caching:
 - **Cookie-Based Batching**: Pre-calculates 10 comparison pairs per batch, HMAC-signed to prevent tampering
 - **Session Caching**: KV lookup before D1, reducing auth overhead from 2 queries to 0 on cache hit
 
+### Cache Flow Details
+
+#### Vote Submission Flow
+```
+POST /api/compare/vote
+  │
+  ├── Auth Check ─────────────────────────────────────┐
+  │     └── KV session:{id} lookup                    │ 0 D1 queries (80% of requests)
+  │         └── miss? → D1 session + user lookup      │ 2 D1 queries (20% of requests)
+  │
+  ├── Vote Processing (sync) ─────────────────────────┤
+  │     ├── Get both clips from D1                    │ 2 D1 reads
+  │     ├── Get user's ratings for both clips         │ 2 D1 reads
+  │     ├── Calculate ELO changes (in-memory)         │
+  │     ├── Upsert user_clip_ratings                  │ 2 D1 writes
+  │     └── Record comparison                         │ 1 D1 write
+  │                                                   │
+  └── Async (via Queue) ──────────────────────────────┤
+        └── Update clip_rating_rollups (batched)      │ 4 D1 ops (deferred)
+                                                      │
+TOTAL: ~8-12 D1 ops per vote ─────────────────────────┘
+```
+
+#### Leaderboard Flow (Stale-While-Revalidate)
+```
+GET /api/leaderboard
+  │
+  ├── KV Cache Check ──────────────────────────────────┐
+  │     key: "leaderboard:{page}:{limit}:{sort}"       │
+  │                                                    │
+  ├── FRESH (age < 60s) ───────────────────────────────┤
+  │     └── Return immediately                         │ 1 KV read, 0 D1 queries
+  │         └── Header: X-Cache: HIT                   │
+  │                                                    │
+  ├── STALE (age 60-120s) ─────────────────────────────┤
+  │     ├── Return stale data immediately             │ User sees response in <50ms
+  │     └── Background refresh (waitUntil):            │
+  │           └── Durable Object coordinates           │
+  │               └── Aggregation (if cooldown passed) │ 3-10 D1 queries (async)
+  │         └── Header: X-Cache: STALE                 │
+  │                                                    │
+  └── MISS (age > 120s or first request) ──────────────┤
+        ├── Durable Object triggers aggregation        │
+        │     └── Check rollup freshness               │ 1 D1 read
+        │     └── Get all clips                        │ 1 D1 read
+        │     └── Get all user ratings                 │ 1 D1 read
+        │     └── Update clips table (batched)         │ N D1 writes
+        ├── Query fresh leaderboard                    │ 1 D1 read
+        └── Store in KV, return                        │ 1 KV write
+            └── Header: X-Cache: MISS                  │
+                                                       │
+MISS cost: 10+ D1 ops, 500-1000ms ─────────────────────┘
+```
+
+#### Durable Object Role (Aggregation Coordinator)
+```
+Purpose: Prevent duplicate expensive aggregations
+
+Without DO:
+  10 users hit /leaderboard simultaneously (cache miss)
+  → 10 parallel aggregations = 100+ D1 queries (wasted)
+
+With DO:
+  10 users hit /leaderboard simultaneously (cache miss)
+  → All requests route to single DO instance
+  → First request triggers aggregation
+  → Other 9 requests wait and share the result
+  → 1 aggregation = 10 D1 queries (10x savings)
+
+Cooldown: 30 seconds between aggregations
+Instance: Single global instance (idFromName('global'))
+```
+
+### Cost Estimates (Paid Plan)
+
+| Operation | D1 Ops | KV Ops | Approx Cost |
+|-----------|--------|--------|-------------|
+| Vote (cached auth) | 8 | 1 | ~$0.000005 |
+| Leaderboard (KV hit) | 0 | 1 | ~$0.0000005 |
+| Leaderboard (SWR stale) | 10 | 2 | ~$0.000003 |
+| Leaderboard (full miss) | 15+ | 1 | ~$0.00001 |
+| Auth check (KV hit) | 0 | 1 | ~$0.0000005 |
+| Next pair (cookie batch) | 2 | 0 | ~$0.000002 |
+
+**Expected monthly cost at high activity (10K votes/day):** $5-10/month
+
 ## Features
 
 - **Pairwise Comparison**: Vote on which clip is better in head-to-head matchups
