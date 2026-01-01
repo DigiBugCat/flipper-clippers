@@ -19,33 +19,54 @@ A Tinder-style clip ranking app for comparing and ranking Twitch clips. Users vo
 
 ```mermaid
 flowchart TB
-    subgraph Edge["Cloudflare Edge Network"]
-        CDN["CDN Cache"]
+    subgraph Client["Browser"]
+        BC["Browser Cache<br/>7d thumbnails"]
+        Cookie["Signed Cookie<br/>10 pre-calc pairs"]
+    end
+
+    subgraph Edge["Cloudflare Edge (300+ locations)"]
+        CDN["CDN Cache<br/>1-30min TTL"]
         Worker["Hono Worker"]
-        KV["KV Store"]
+
+        subgraph KV["KV Store"]
+            Sessions["SESSION_CACHE<br/>60s TTL"]
+            Thumbs["THUMBNAIL_CACHE<br/>30d TTL"]
+        end
     end
 
-    subgraph Storage["Cloudflare D1"]
-        DB[(SQLite DB)]
+    subgraph D1["Cloudflare D1"]
+        DB[(SQLite)]
+        Rollups["Rollup Tables<br/>Lazy aggregation"]
     end
 
-    Browser["Browser"] --> CDN
+    Client --> CDN
     CDN --> Worker
-    Worker <--> KV
+    Worker <--> Sessions
+    Worker <--> Thumbs
     Worker <--> DB
-    Worker <--> Twitch["Twitch API"]
-    Cron["⏰ Cron Trigger"] --> Worker
+    Worker <--> Rollups
+    Worker <--> Twitch["Twitch API<br/>OAuth + Clips"]
+    Cookie -.->|"HMAC signed"| Worker
 ```
 
 ### Serverless-First Design
 
-This app is optimized for edge computing on Cloudflare's global network:
+Optimized for edge computing with multi-layer caching:
 
-- **Edge Computing**: Runs on Cloudflare Workers at 300+ locations worldwide for low-latency responses
-- **Multi-Layer Caching**: CDN caching for API responses, KV for sessions and thumbnails
-- **D1 Database**: SQLite-based serverless database with automatic replication
-- **Cron Triggers**: Background aggregation of global rankings runs every 5 minutes
-- **Cookie-Based Batching**: Pre-calculates comparison pairs to minimize database queries
+| Layer | What's Cached | TTL | Purpose |
+|-------|--------------|-----|---------|
+| **Browser** | Thumbnails | 7 days | Eliminate repeat image fetches |
+| **Cookie** | Next 10 clip pairs | 1 hour | Reduce pairing queries by 10x |
+| **CDN** | API responses | 1-30 min | Edge-cached leaderboards & clip data |
+| **KV** | Sessions | 60s | Skip auth DB lookups |
+| **KV** | Thumbnails | 30 days | Cache Twitch images at edge |
+| **D1** | Rollup tables | 5 min staleness | Pre-aggregated global rankings |
+
+**Key optimizations:**
+- **Lazy Aggregation**: Global rankings recalculate only on cache miss, not on a schedule
+- **Incremental Rollups**: Each vote updates rollup sums immediately (2 queries vs full recalc)
+- **Cookie-Based Batching**: Pre-calculates 10 comparison pairs per batch, HMAC-signed to prevent tampering
+- **Session Caching**: KV lookup before D1, reducing auth overhead from 2 queries to 0 on cache hit
 
 ## Features
 
@@ -149,7 +170,7 @@ Title,Uploader,Date,URL
 | `POST /api/compare/vote` | Submit a vote |
 | `GET /api/leaderboard` | Global leaderboard |
 | `GET /api/leaderboard/me` | Personal leaderboard |
-| `POST /api/aggregate` | Trigger global ranking aggregation |
+| `POST /api/aggregate` | Manual aggregation trigger (runs lazily on leaderboard miss) |
 
 ## License
 
