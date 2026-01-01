@@ -18,31 +18,33 @@ A Tinder-style clip ranking app for comparing and ranking Twitch clips. Users vo
 ## Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Client["Browser"]
-        BC["Browser Cache<br/>7d thumbnails"]
-        Cookie["Signed Cookie<br/>10 pre-calc pairs"]
+flowchart TD
+    subgraph Client["① Client Layer"]
+        Browser["Browser"]
+        BCache["Browser Cache<br/>thumbnails 7d"]
+        Cookie["Signed Cookie<br/>pairs 1h"]
     end
 
-    subgraph Edge["Cloudflare Edge (300+ PoPs)"]
-        CDN["CDN Cache<br/>1-30min TTL"]
+    subgraph Edge["② Edge Layer (300+ PoPs)"]
+        CDN["CDN Cache<br/>API 1-30min"]
         Worker["Hono Worker"]
-        subgraph KV["KV Store"]
-            Sessions["SESSION_CACHE<br/>60s TTL"]
-            Thumbs["THUMBNAIL_CACHE<br/>30d TTL"]
-        end
+        KV["KV Store<br/>sessions 60s, thumbs 30d"]
     end
 
-    subgraph D1["Cloudflare D1 (SQLite)"]
-        Tables["Users, Clips,<br/>Ratings, Comparisons"]
-        Rollups["Rollup Tables<br/>5min stale threshold"]
+    subgraph Data["③ Data Layer"]
+        Rollups["D1 Rollups<br/>stale after 5min"]
+        Tables["D1 Tables<br/>source of truth"]
     end
 
-    Twitch["Twitch API<br/>OAuth + Clips"]
+    Twitch["④ External<br/>Twitch API"]
 
-    Client --> CDN --> Worker
+    Browser --> BCache
+    BCache -->|miss| CDN
+    CDN -->|miss| Worker
+    Cookie -.->|with request| Worker
     Worker <--> KV
-    Worker <--> D1
+    KV -->|miss| Rollups
+    Rollups -->|stale| Tables
     Worker <--> Twitch
 ```
 
