@@ -6,7 +6,6 @@
 // Import types (includes Window interface extension)
 import './types';
 import type { User } from './types';
-import { initRouter } from './router';
 
 // Global state
 let currentUser: User | null = null;
@@ -148,8 +147,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Initialize SPA-like router (handles mousedown navigation + prefetching + content swapping)
-  initRouter();
 });
 
 /**

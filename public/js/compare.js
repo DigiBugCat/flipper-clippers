@@ -77,12 +77,6 @@
     if (overlayId === "preload-a") preloadedSlugA = null;
     else preloadedSlugB = null;
   }
-  function clearPreloadState() {
-    preloadedSlugA = null;
-    preloadedSlugB = null;
-    document.getElementById("preload-a")?.remove();
-    document.getElementById("preload-b")?.remove();
-  }
   async function prefetchUpcomingPairs() {
     if (prefetchInProgress) return;
     prefetchInProgress = true;
@@ -557,13 +551,5 @@
     }
   }
   document.addEventListener("DOMContentLoaded", initComparePage);
-  window.addEventListener("spa:pageload", (e) => {
-    const detail = e.detail;
-    if (detail.pathname === "/compare" || detail.pathname === "/compare.html") {
-      initComparePage();
-    } else {
-      clearPreloadState();
-    }
-  });
 })();
 //# sourceMappingURL=compare.js.map

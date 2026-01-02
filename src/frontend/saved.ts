@@ -315,16 +315,6 @@ async function unsaveClip(clipId: number): Promise<void> {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', initSavedPage);
 
-// Support SPA navigation - reinitialize on content swap
-window.addEventListener('spa:pageload', (e: Event) => {
-  const detail = (e as CustomEvent).detail;
-  if (detail.pathname === '/saved' || detail.pathname === '/saved.html') {
-    // Reset state for fresh load
-    savedClips = [];
-    draggedItem = null;
-    initSavedPage();
-  }
-});
 
 // Export functions for use in other modules
 export {

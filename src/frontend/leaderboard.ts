@@ -1083,19 +1083,6 @@ window.addEventListener('popstate', async () => {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', initLeaderboardPage);
 
-// Support SPA navigation - reinitialize on content swap
-window.addEventListener('spa:pageload', (e: Event) => {
-  const detail = (e as CustomEvent).detail;
-  if (detail.pathname === '/leaderboard' || detail.pathname === '/leaderboard.html') {
-    // Reset state for fresh load
-    currentTab = 'global';
-    currentSort = 'elo';
-    currentOrder = 'desc';
-    currentPage = 1;
-    personalRankings = [];
-    initLeaderboardPage();
-  }
-});
 
 // Export functions for use in other modules
 export {

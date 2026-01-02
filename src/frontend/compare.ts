@@ -920,13 +920,3 @@ export {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', initComparePage);
 
-// Support SPA navigation - reinitialize on content swap
-window.addEventListener('spa:pageload', (e: Event) => {
-  const detail = (e as CustomEvent).detail;
-  if (detail.pathname === '/compare' || detail.pathname === '/compare.html') {
-    initComparePage();
-  } else {
-    // Clear preloaded embeds when leaving compare page
-    clearPreloadState();
-  }
-});

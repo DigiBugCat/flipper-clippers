@@ -369,10 +369,3 @@ window.renderTopClips = renderTopClips;
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', init);
 
-// Support SPA navigation - reinitialize on content swap
-window.addEventListener('spa:pageload', (e: Event) => {
-  const detail = (e as CustomEvent).detail;
-  if (detail.pathname === '/profile.html' || detail.pathname.startsWith('/profile')) {
-    init();
-  }
-});
