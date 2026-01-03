@@ -806,9 +806,9 @@ export async function getUserLeaderboardSorted(
   return result.results;
 }
 
-// Remove clip from user's rankings
+// Remove clip from user's rankings and mark global ELO for recalculation
 export async function deleteUserClipRating(db: D1Database, userId: number, clipId: number): Promise<void> {
-  // Get the current position and matches played for the clip being removed
+  // Get rating data needed for position adjustment and rollup staleness marking
   const rating = await db
     .prepare('SELECT manual_position, matches_played FROM user_clip_ratings WHERE user_id = ? AND clip_id = ?')
     .bind(userId, clipId)
@@ -830,13 +830,23 @@ export async function deleteUserClipRating(db: D1Database, userId: number, clipI
       .run();
   }
 
-  // Decrement user's total_comparisons by the matches played for this clip
+  // Mark the rollup as stale so the DO will recalculate global ELO on next leaderboard view.
+  // This is more efficient than calculating the exact new value here, and the periodic
+  // aggregation will properly recalculate weighted averages from remaining ratings.
   if (rating.matches_played > 0) {
     await db
-      .prepare('UPDATE users SET total_comparisons = MAX(0, total_comparisons - ?) WHERE id = ?')
-      .bind(rating.matches_played, userId)
+      .prepare(
+        `UPDATE clip_rating_rollups SET last_updated_at = datetime('now', '-10 minutes') WHERE clip_id = ?`
+      )
+      .bind(clipId)
       .run();
+    console.log(`[RATING] Marked rollup stale for clip=${clipId} after rating deletion`);
   }
+
+  // NOTE: We intentionally do NOT decrement total_comparisons here.
+  // Each comparison involves two clips, so decrementing by matches_played for each
+  // deleted clip would double-count (or worse) when multiple clips are deleted.
+  // The comparison records still exist - we're only removing the personal ELO rating.
 }
 
 // Vote history entry for a clip
