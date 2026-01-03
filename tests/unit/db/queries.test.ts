@@ -33,6 +33,7 @@ import {
   unsaveClip,
   reorderSavedClip,
   getVoterLeaderboard,
+  deleteUserClipRating,
 } from '../../../src/db/queries';
 
 /**
@@ -758,6 +759,141 @@ describe('db/queries', () => {
         expect(db._statements[0].sql).toContain('ORDER BY total_comparisons DESC');
         expect(db._statements[0].sql).toContain('total_comparisons > 0');
       });
+    });
+  });
+
+  describe('deleteUserClipRating', () => {
+    it('deletes rating, comparisons, and decrements total_comparisons correctly', async () => {
+      let comparisonsDeleted = 2; // Simulate deleting 2 comparisons
+      const db = createMockD1({
+        firstResult: (sql: string) => {
+          if (sql.includes('SELECT manual_position')) {
+            return { manual_position: null, matches_played: 5 };
+          }
+          return null;
+        },
+        runResult: { success: true, meta: { changes: comparisonsDeleted } },
+      });
+
+      await deleteUserClipRating(db as unknown as D1Database, 1, 10);
+
+      // Should have: SELECT rating, DELETE rating, DELETE comparisons, UPDATE user, UPDATE rollup
+      const deleteRatingStmt = db._statements.find(s =>
+        s.sql.includes('DELETE FROM user_clip_ratings')
+      );
+      const deleteComparisonsStmt = db._statements.find(s =>
+        s.sql.includes('DELETE FROM comparisons')
+      );
+      const updateUserStmt = db._statements.find(s =>
+        s.sql.includes('UPDATE users SET total_comparisons')
+      );
+      const updateRollupStmt = db._statements.find(s =>
+        s.sql.includes('UPDATE clip_rating_rollups')
+      );
+
+      expect(deleteRatingStmt).toBeDefined();
+      expect(deleteComparisonsStmt).toBeDefined();
+      expect(updateUserStmt).toBeDefined();
+      expect(updateRollupStmt).toBeDefined();
+
+      // Verify comparison delete uses correct WHERE clause
+      expect(deleteComparisonsStmt?.sql).toContain('clip_a_id = ? OR clip_b_id = ?');
+      expect(deleteComparisonsStmt?.params).toContain(10); // clipId
+    });
+
+    it('does nothing if rating does not exist', async () => {
+      const db = createMockD1({ firstResult: null });
+
+      await deleteUserClipRating(db as unknown as D1Database, 1, 999);
+
+      // Only SELECT should be recorded
+      expect(db._statements.length).toBe(1);
+      expect(db._statements[0].sql).toContain('SELECT manual_position');
+    });
+
+    it('shifts manual positions when rating had a manual position', async () => {
+      const db = createMockD1({
+        firstResult: (sql: string) => {
+          if (sql.includes('SELECT manual_position')) {
+            return { manual_position: 3, matches_played: 2 };
+          }
+          return null;
+        },
+        runResult: { success: true, meta: { changes: 1 } },
+      });
+
+      await deleteUserClipRating(db as unknown as D1Database, 1, 10);
+
+      // Should have UPDATE for shifting positions
+      const shiftStmt = db._statements.find(s =>
+        s.sql.includes('manual_position = manual_position - 1')
+      );
+      expect(shiftStmt).toBeDefined();
+      expect(shiftStmt?.params).toContain(3); // the old position
+    });
+
+    it('does not update user counter when no comparisons deleted', async () => {
+      const db = createMockD1({
+        firstResult: (sql: string) => {
+          if (sql.includes('SELECT manual_position')) {
+            return { manual_position: null, matches_played: 0 };
+          }
+          return null;
+        },
+        runResult: { success: true, meta: { changes: 0 } }, // No comparisons deleted
+      });
+
+      await deleteUserClipRating(db as unknown as D1Database, 1, 10);
+
+      // Should NOT have UPDATE users statement
+      const updateUserStmt = db._statements.find(s =>
+        s.sql.includes('UPDATE users SET total_comparisons')
+      );
+      expect(updateUserStmt).toBeUndefined();
+    });
+
+    it('uses actual delete count instead of matches_played to avoid double-counting', async () => {
+      // This is the key test: if clip A was in comparisons [A-B, A-C] and B was in [A-B, B-C]
+      // When we delete A first, we delete [A-B, A-C] (count=2)
+      // When we delete B next, [A-B] is already deleted, so we only delete [B-C] (count=1)
+      // The delete statement returns the actual count, not matches_played
+
+      // First deletion (clip A)
+      const dbFirst = createMockD1({
+        firstResult: (sql: string) => {
+          if (sql.includes('SELECT manual_position')) {
+            return { manual_position: null, matches_played: 2 }; // A was in 2 comparisons
+          }
+          return null;
+        },
+        runResult: { success: true, meta: { changes: 2 } }, // Actually deleted 2
+      });
+
+      await deleteUserClipRating(dbFirst as unknown as D1Database, 1, 1);
+
+      const updateA = dbFirst._statements.find(s =>
+        s.sql.includes('UPDATE users SET total_comparisons')
+      );
+      expect(updateA?.params?.[0]).toBe(2); // Decremented by actual delete count
+
+      // Second deletion (clip B) - simulating that [A-B] was already deleted
+      const dbSecond = createMockD1({
+        firstResult: (sql: string) => {
+          if (sql.includes('SELECT manual_position')) {
+            return { manual_position: null, matches_played: 2 }; // B was also in 2 comparisons originally
+          }
+          return null;
+        },
+        runResult: { success: true, meta: { changes: 1 } }, // Only 1 left to delete (B-C)
+      });
+
+      await deleteUserClipRating(dbSecond as unknown as D1Database, 1, 2);
+
+      const updateB = dbSecond._statements.find(s =>
+        s.sql.includes('UPDATE users SET total_comparisons')
+      );
+      // Key assertion: decremented by 1 (actual delete count), NOT 2 (matches_played)
+      expect(updateB?.params?.[0]).toBe(1);
     });
   });
 });
